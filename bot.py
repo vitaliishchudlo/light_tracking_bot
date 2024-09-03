@@ -5,7 +5,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config import Config, load_config
-from src.handlers import echo
+from src.handlers import echo, start
+from src.callbacks import callback_handler
+from src.services.db import subscriptions_collection
+
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +29,13 @@ async def main():
     bot: Bot = Bot(token=config.tg_bot.token, default=bot_properties)
     dp: Dispatcher = Dispatcher()
 
-    dp.include_router(echo.router)
+    dp.include_routers(*(
+        start.router,
+        callback_handler.router,
+        #  Other routers
+
+        echo.router,
+    ))
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
