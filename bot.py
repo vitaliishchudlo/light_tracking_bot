@@ -4,21 +4,28 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.enums import ParseMode
-from config import Config, load_config
-from src.handlers import echo, start
-from src.callbacks import callback_handler
-from src.services.db import subscriptions_collection
 
+from config import Config, load_config
+from src.callbacks import callback_handler
+from src.handlers import echo, start, get_graphs
+
+# from src.services.db import subscriptions_collection, user_notifications_collection, outage_groups_collection
+# ToDo Maybe delete this import in future
 
 
 logger = logging.getLogger(__name__)
+
+
+async def on_startup(bot: Bot):
+    pass
+    # TODO Implement here creating of all the graphs images and saving them to the filesystem
 
 
 async def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(filename)s:%(lineno)d #%(levelname)-8s "
-        "[%(asctime)s] - %(name)s - %(message)s",
+               "[%(asctime)s] - %(name)s - %(message)s",
     )
 
     logger.info("Starting bot")
@@ -32,10 +39,12 @@ async def main():
     dp.include_routers(*(
         start.router,
         callback_handler.router,
+        get_graphs.router,
         #  Other routers
 
         echo.router,
     ))
+    dp.startup.register(on_startup)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
