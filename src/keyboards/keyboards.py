@@ -1,4 +1,3 @@
-import ipdb
 from aiogram.types import InlineKeyboardButton
 from aiogram.types import KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
