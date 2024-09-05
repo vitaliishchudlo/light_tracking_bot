@@ -26,13 +26,7 @@ async def handle_group_subscription(callback_query: CallbackQuery, bot: Bot, gro
             "group_number": group,
             "date_subscribed": datetime.now()
         })
-        # await bot.edit_message_text(
-        #     text=f"Ви підписалися на оновлення по групі відключень №{group}",
-        #     chat_id=chat_id,
-        #     message_id=message_id,
-        #     reply_markup=get_group_keyboard(user.id)
-        # )
-        # await bot.answer_callback_query(callback_query.id, text=f"Added to db {group}")
+
         await bot.edit_message_reply_markup(
             chat_id=chat_id,
             message_id=message_id,
@@ -40,12 +34,6 @@ async def handle_group_subscription(callback_query: CallbackQuery, bot: Bot, gro
         )
         await bot.answer_callback_query(callback_query.id, text=f"Підписано на групу №{group}")
 
-        # await bot.edit_message_media(
-        #     chat_id=chat_id,
-        #     message_id=message_id,
-        #     media=InputMediaPhoto(media=FSInputFile(f"graphs_images/graph_{group}.png")),
-        #     reply_markup=get_group_keyboard(user.id)
-        # )
 
 
 async def handle_group_unsubscription(callback_query: CallbackQuery, bot: Bot, group: str):
@@ -59,13 +47,6 @@ async def handle_group_unsubscription(callback_query: CallbackQuery, bot: Bot, g
             "id_telegram": user.id,
             "group_number": group
         })
-        # await bot.edit_message_text(
-        #     text=f"Ви відписалися від оновлень по групі відключень №{group}",
-        #     chat_id=chat_id,
-        #     message_id=message_id,
-        #     reply_markup=get_group_keyboard(user.id)
-        # )
-        # await bot.answer_callback_query(callback_query.id, text=f"Removed from db {group}")
 
         await bot.edit_message_reply_markup(
             chat_id=chat_id,
