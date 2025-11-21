@@ -13,5 +13,5 @@ async def process_any_message(message: Message, bot: Bot):
         chat_id=message.chat.id,
         text="Список актуальних черг, на які можна *підписатися* чи *відписатися*:",
         parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=get_group_keyboard(message.chat.id),
+        reply_markup=get_group_keyboard(message.from_user.id),
     )

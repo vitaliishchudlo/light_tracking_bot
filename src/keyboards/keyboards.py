@@ -3,8 +3,9 @@ from aiogram.types import KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-from src.constants import GROUPS_NUMBERS
+from src.constants import QUEUES
 from src.services.db import subscriptions_collection
+from typing import List
 
 
 def get_subscribe_keyboard():
@@ -21,19 +22,18 @@ def get_subscribe_keyboard():
 def get_group_keyboard(user_id: int):
     builder = InlineKeyboardBuilder()
 
-    user_subscriptions = subscriptions_collection.find({"id_telegram": user_id})
-    subscribed_groups = [sub['group_number'] for sub in user_subscriptions]
+    user_subscriptions = list(subscriptions_collection.find({"id_telegram": user_id}))
+    # Support both old 'group_number' and new 'queue' field names
+    subscribed_queues = [sub.get('queue') or sub.get('group_number') for sub in user_subscriptions if sub.get('queue') or sub.get('group_number')]
 
-    for number in GROUPS_NUMBERS:
-        text = f"✅ {number}" if number in subscribed_groups else number
+    for queue in QUEUES:
+        text = f"✅ {queue}" if queue in subscribed_queues else queue
 
         button = InlineKeyboardButton(text=text,
-                                      callback_data=f"group_unsubscribe_{number}" if number in subscribed_groups else f"group_subscribe_{number}")
+                                      callback_data=f"queue_unsubscribe_{queue}" if queue in subscribed_queues else f"queue_subscribe_{queue}")
         builder.add(button)
 
-    builder.add(InlineKeyboardButton(text="Отримати графіки для моїх груп", callback_data=f"get_my_graphs"))
-
-    # Adjust the rows (optional, based on your desired layout)
-    builder.adjust(2, 2, 2, 2, 2, 5, 1)
+    # Adjust the rows: 2 columns for each row
+    builder.adjust(2, 2, 2, 2, 2, 2)
 
     return builder.as_markup()
