@@ -2,10 +2,10 @@ import logging
 
 from aiogram import Router, Bot, F
 from aiogram.types import Message
+from datetime import datetime, timedelta
 
 from src.keyboards.keyboards import get_subscribe_keyboard, get_group_keyboard
-from src.services.db import subscriptions_collection
-from src.services.api_client import ScheduleAPI
+from src.services.db import subscriptions_collection, get_schedules_collection
 
 logger = logging.getLogger(__name__)
 
@@ -35,40 +35,99 @@ async def get_graphs(message: Message, bot: Bot):
             reply_markup=get_subscribe_keyboard()
         )
 
-    # Fetch current schedules from API
-    api_client = ScheduleAPI()
+    def _parse_date(date_str: str):
+        """Parse date string in format DD.MM.YYYY"""
+        try:
+            return datetime.strptime(date_str, "%d.%m.%Y")
+        except ValueError:
+            return None
+    
+    def _parse_time(time_str: str):
+        """Parse time string in format HH:MM"""
+        try:
+            return datetime.strptime(time_str, "%H:%M").time()
+        except ValueError:
+            return None
+    
+    def _is_shutdown_past(event_date: str, shutdown_from: str, shutdown_to: str) -> bool:
+        """Check if shutdown is in the past"""
+        try:
+            date_obj = _parse_date(event_date)
+            if not date_obj:
+                return False
+            
+            from_time = _parse_time(shutdown_from)
+            to_time = _parse_time(shutdown_to)
+            
+            if not from_time or not to_time:
+                return False
+            
+            # Create datetime for shutdown end time
+            shutdown_end = datetime.combine(date_obj.date(), to_time)
+            
+            # Handle case where to_time is 00:00 (means it ends at midnight, next day)
+            if shutdown_to == "00:00":
+                shutdown_end += timedelta(days=1)
+            
+            now = datetime.now()
+            return shutdown_end < now
+        except Exception as e:
+            logger.error(f"Error checking if shutdown is past: {e}")
+            return False
+    
+    # Fetch schedules from database (not API to avoid rate limiting)
+    schedules_collection = get_schedules_collection()
     all_messages = []
+    
+    if schedules_collection is None:
+        logger.warning("schedules_collection not initialized, cannot fetch schedules from DB")
+        return await message.reply(
+            text="Наразі сервіс недоступний. Спробуйте пізніше.",
+            reply_markup=get_subscribe_keyboard()
+        )
     
     for queue in sorted(queues):
         try:
-            schedule_data = await api_client.fetch_schedule(queue)
+            # Get stored schedule from database
+            doc = await schedules_collection.find_one({"queue": queue})
             
-            if not schedule_data:
+            if not doc or not doc.get('schedule'):
+                logger.debug(f"No schedule data in DB for queue {queue}")
+                continue
+            
+            schedule = doc.get('schedule', {})
+            if not schedule or not isinstance(schedule, dict):
                 continue
             
             # Format message for this queue
-            message_parts = [f"💡 <b>Графік для черги № {queue}</b>"]
+            message_parts = [f"💡 <b>Графік для черги <u>{queue}</u></b>"]
             
             # Sort by event date
-            sorted_items = sorted(schedule_data, key=lambda x: x.get('eventDate', ''))
+            sorted_dates = sorted(schedule.keys())
             
-            for item in sorted_items:
-                event_date = item.get('eventDate')
-                if not event_date:
-                    continue
+            for event_date in sorted_dates:
+                date_data = schedule.get(event_date, {})
+                shutdowns = date_data.get('shutdowns', [])
                 
-                queues_data = item.get('queues', {}).get(queue, [])
-                if not queues_data:
+                if not shutdowns:
                     continue
                 
                 message_parts.append(f"\n\n📅 {event_date}\n")
                 
-                for shutdown in queues_data:
+                for shutdown in shutdowns:
                     hours = shutdown.get('shutdownHours', '')
+                    from_time = shutdown.get('from', '')
+                    to_time = shutdown.get('to', '')
+                    
                     if hours:
-                        message_parts.append(f"   🔴️ {hours}")
+                        # Check if shutdown is in the past
+                        is_past = _is_shutdown_past(event_date, from_time, to_time)
+                        if is_past:
+                            message_parts.append(f"   <s>🔴️ {hours}</s>")
+                        else:
+                            message_parts.append(f"   🔴️ {hours}")
                 
-                approved_since = item.get('scheduleApprovedSince')
+                approved_since = date_data.get('scheduleApprovedSince')
                 if approved_since:
                     message_parts.append(f"\n📌 Оновлено: {approved_since}")
             
@@ -76,10 +135,8 @@ async def get_graphs(message: Message, bot: Bot):
                 all_messages.append("\n".join(message_parts))
         
         except Exception as e:
-            logger.error(f"Error fetching schedule for queue {queue}: {e}")
+            logger.error(f"Error fetching schedule from DB for queue {queue}: {e}", exc_info=True)
             continue
-    
-    await api_client.close()
     
     if not all_messages:
         return await message.reply(

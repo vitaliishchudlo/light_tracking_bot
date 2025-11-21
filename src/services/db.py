@@ -54,6 +54,8 @@ async def init_db():
         
         # Create indexes
         await schedules_collection.create_index([("queue", 1)], unique=True)
+        # Index for tracking shown dates
+        await schedules_collection.create_index([("queue", 1), ("shownDates.date", 1)])
         logger.info("MongoDB initialized successfully - schedules_collection ready")
     except Exception as e:
         logger.error(f"Failed to initialize MongoDB: {e}")
