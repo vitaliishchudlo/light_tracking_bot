@@ -1,10 +1,49 @@
 version: '3.8'
 
 services:
+  mongodb:
+    image: mongo:7.0
+    container_name: svitlo-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    environment:
+      - MONGO_INITDB_DATABASE=light_tracker_db
+    networks:
+      - svitlo-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
   bot-app:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: svitlo-bot
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
     env_file:
       - .env
-    command: ["python", "./bot.py"]
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/
+    networks:
+      - svitlo-network
+    command: ["python", "bot.py"]
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+
+networks:
+  svitlo-network:
+    driver: bridge
