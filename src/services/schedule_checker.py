@@ -71,18 +71,20 @@ class ScheduleChecker:
                 continue
             
             queues_data = item.get('queues', {}).get(queue, [])
-            if not queues_data:
-                continue
+            # Keep dates even if queues_data is empty (cancelled schedule)
+            # This allows us to detect when a schedule is cancelled
             
             shutdowns = []
-            for shutdown in queues_data:
-                shutdowns.append({
-                    'from': shutdown.get('from'),
-                    'to': shutdown.get('to'),
-                    'shutdownHours': shutdown.get('shutdownHours'),
-                    'status': shutdown.get('status')
-                })
+            if queues_data:  # Only process if there are shutdowns
+                for shutdown in queues_data:
+                    shutdowns.append({
+                        'from': shutdown.get('from'),
+                        'to': shutdown.get('to'),
+                        'shutdownHours': shutdown.get('shutdownHours'),
+                        'status': shutdown.get('status')
+                    })
             
+            # Always add the date, even if shutdowns is empty (cancelled)
             normalized[event_date] = {
                 'shutdowns': shutdowns,
                 'createdAt': item.get('createdAt'),
@@ -101,15 +103,16 @@ class ScheduleChecker:
             new_schedule: New schedule state
             
         Returns:
-            Tuple of (has_changes, new_date_notification)
+            Tuple of (has_changes, new_date_notification, cancelled_dates)
             - has_changes: True if there are changes in actual schedule data
             - new_date_notification: Date string if new date appeared (e.g., tomorrow) that we haven't shown today, None otherwise
+            - cancelled_dates: Set of dates that were cancelled (had shutdowns, now empty)
         """
         # First time - save schedule but don't notify (return False to skip notification)
         # This prevents spamming users on first run
         if not old_schedule or len(old_schedule) == 0:
             logger.info(f"First time checking this queue or empty old schedule - saving schedule without notification. Old: {old_schedule}, New dates: {list(new_schedule.keys())}")
-            return False, None
+            return False, None, set()
         
         # Compare by event dates and shutdowns
         old_dates = set(old_schedule.keys())
@@ -123,19 +126,34 @@ class ScheduleChecker:
             # Check if we already showed this date today
             shown_dates = await self._get_shown_dates_today(queue)
             for new_date in sorted(new_date_added):
-                if new_date not in shown_dates:
+                # Only notify if the new date has actual shutdowns (not empty/cancelled)
+                new_date_data = new_schedule.get(new_date, {})
+                new_date_shutdowns = new_date_data.get('shutdowns', [])
+                
+                if new_date not in shown_dates and len(new_date_shutdowns) > 0:
                     logger.info(f"New date appeared for {queue}: {new_date} - will notify")
                     new_date_to_notify = new_date
                     break  # Only notify about the first new date we haven't shown
+                elif len(new_date_shutdowns) == 0:
+                    logger.debug(f"New date {new_date} appeared but is empty (cancelled) - skipping notification")
         
         # Check if shutdowns changed for existing dates
         has_existing_changes = False
+        cancelled_dates = set()  # Dates that were cancelled (had shutdowns, now empty)
+        
         for date in new_dates & old_dates:  # Only check dates that exist in both
             old_date_data = old_schedule.get(date, {})
             new_date_data = new_schedule.get(date, {})
             
             old_shutdowns = old_date_data.get('shutdowns', [])
             new_shutdowns = new_date_data.get('shutdowns', [])
+            
+            # Check if schedule was cancelled (had shutdowns, now empty)
+            if len(old_shutdowns) > 0 and len(new_shutdowns) == 0:
+                logger.info(f"Schedule cancelled for {date}: had {len(old_shutdowns)} shutdowns, now empty")
+                cancelled_dates.add(date)
+                has_existing_changes = True
+                continue  # Don't check other changes for cancelled dates
             
             # Compare shutdowns count
             if len(old_shutdowns) != len(new_shutdowns):
@@ -159,11 +177,11 @@ class ScheduleChecker:
         
         # Return True if we have new date to notify OR existing changes
         if new_date_to_notify or has_existing_changes:
-            return True, new_date_to_notify
+            return True, new_date_to_notify, cancelled_dates
         
         # Don't notify on scheduleApprovedSince changes alone - only on actual schedule changes
         logger.debug("No changes detected in schedule data")
-        return False, None
+        return False, None, set()
     
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         """Parse date string in format DD.MM.YYYY"""
@@ -327,7 +345,7 @@ class ScheduleChecker:
         except Exception as e:
             logger.error(f"Error saving schedule for {queue}: {e}", exc_info=True)
     
-    def _format_notification_message(self, queue: str, schedule: Dict[str, Any], new_date: Optional[str] = None) -> str:
+    def _format_notification_message(self, queue: str, schedule: Dict[str, Any], new_date: Optional[str] = None, cancelled_dates: Optional[set] = None) -> str:
         """
         Format notification message for users
         
@@ -335,23 +353,37 @@ class ScheduleChecker:
             queue: Queue number
             schedule: Schedule data
             new_date: Optional new date that appeared (e.g., tomorrow)
+            cancelled_dates: Set of dates that were cancelled (had shutdowns, now empty)
             
         Returns:
             Formatted message
         """
-        if new_date:
+        if cancelled_dates is None:
+            cancelled_dates = set()
+        
+        # Check if all dates in schedule are cancelled
+        sorted_dates = sorted(schedule.keys())
+        all_cancelled = all(date in cancelled_dates for date in sorted_dates) and len(sorted_dates) > 0
+        
+        if all_cancelled:
+            # All dates are cancelled - show cancellation message
+            message_parts = [f"🚫 <b>Скасовано графік для черги <u>{queue}</u></b>"]
+        elif new_date:
             message_parts = [f"🔔 <b>З'явився графік на <u>{new_date}</u> для черги <u>{queue}</u></b>"]
         else:
             message_parts = [f"🔔 <b>Зміни у графіку для черги <u>{queue}</u></b> ❗"]
 
         # Sort dates
-        sorted_dates = sorted(schedule.keys())
-        
         for date in sorted_dates:
             date_data = schedule[date]
             shutdowns = date_data.get('shutdowns', [])
+            is_cancelled = date in cancelled_dates
             
-            if shutdowns:
+            if is_cancelled:
+                # Show cancellation message for this date
+                message_parts.append(f"\n\n📅 {date}")
+                message_parts.append(f"   💡 <b>Графік скасовано</b> ⚡️")
+            elif shutdowns:
                 message_parts.append(f"\n\n📅 {date}\n")
                 for shutdown in shutdowns:
                     hours = shutdown.get('shutdownHours', '')
@@ -362,13 +394,13 @@ class ScheduleChecker:
                         # Check if shutdown is in the past
                         is_past = self._is_shutdown_past(date, from_time, to_time)
                         if is_past:
-                            message_parts.append(f"   <s>🔴️ {hours}</s>")
+                            message_parts.append(f"   🔴️ <s> {hours} </s>")
                         else:
                             message_parts.append(f"   🔴️ {hours}")
-                
-                approved_since = date_data.get('scheduleApprovedSince')
-                if approved_since:
-                    message_parts.append(f"\n  📌 Оновлено: {approved_since}")
+            
+            approved_since = date_data.get('scheduleApprovedSince')
+            if approved_since:
+                message_parts.append(f"\n📌 Оновлено: {approved_since}")
         
         return "\n".join(message_parts)
     
@@ -447,20 +479,24 @@ class ScheduleChecker:
                         latest_approved = approved
             
             # Check for changes
-            has_changes, new_date = await self._has_changes(queue, old_schedule, new_schedule)
+            has_changes, new_date, cancelled_dates = await self._has_changes(queue, old_schedule, new_schedule)
             
             # Always save the latest schedule to database
             await self._save_schedule(queue, new_schedule, latest_approved)
             
             # Only notify if there are actual changes
             if has_changes:
-                # Check if there are changes in existing dates
+                # Check if there are changes in existing dates (excluding cancelled ones)
                 old_dates = set(old_schedule.keys()) if old_schedule else set()
                 new_dates = set(new_schedule.keys())
                 existing_dates_changed = False
                 changed_dates = set()
                 
                 for date in new_dates & old_dates:
+                    # Skip cancelled dates - they're handled separately
+                    if date in cancelled_dates:
+                        continue
+                    
                     old_date_data = old_schedule.get(date, {})
                     new_date_data = new_schedule.get(date, {})
                     old_shutdowns = old_date_data.get('shutdowns', [])
@@ -472,7 +508,15 @@ class ScheduleChecker:
                         changed_dates.add(date)
                 
                 # Prepare schedule to show in notification
-                if new_date:
+                if cancelled_dates:
+                    logger.info(f"Schedule cancelled for {queue} on dates: {cancelled_dates}")
+                    # Show cancelled dates
+                    cancelled_schedule = {date: new_schedule[date] for date in cancelled_dates}
+                    # Also include changed dates if any
+                    for date in changed_dates:
+                        cancelled_schedule[date] = new_schedule[date]
+                    message = self._format_notification_message(queue, cancelled_schedule, None, cancelled_dates)
+                elif new_date:
                     logger.info(f"New date appeared for {queue}: {new_date} - notifying subscribers")
                     # Mark this date as shown
                     await self._mark_date_as_shown(queue, new_date)
@@ -482,19 +526,19 @@ class ScheduleChecker:
                         notification_schedule = {new_date: new_schedule[new_date]}
                         for date in changed_dates:
                             notification_schedule[date] = new_schedule[date]
-                        message = self._format_notification_message(queue, notification_schedule, new_date)
+                        message = self._format_notification_message(queue, notification_schedule, new_date, cancelled_dates)
                     else:
                         # Show only the new date
                         new_date_schedule = {new_date: new_schedule[new_date]}
-                        message = self._format_notification_message(queue, new_date_schedule, new_date)
+                        message = self._format_notification_message(queue, new_date_schedule, new_date, cancelled_dates)
                 elif existing_dates_changed:
                     logger.info(f"Changes in existing dates for {queue} - notifying subscribers")
                     # Show only changed dates
                     changed_schedule = {date: new_schedule[date] for date in changed_dates}
-                    message = self._format_notification_message(queue, changed_schedule, None)
+                    message = self._format_notification_message(queue, changed_schedule, None, cancelled_dates)
                 else:
                     # Fallback - show all new schedule
-                    message = self._format_notification_message(queue, new_schedule, None)
+                    message = self._format_notification_message(queue, new_schedule, None, cancelled_dates)
                 
                 await self._notify_subscribers(queue, message)
                 return True

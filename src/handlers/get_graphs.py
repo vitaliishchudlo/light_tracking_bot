@@ -123,7 +123,7 @@ async def get_graphs(message: Message, bot: Bot):
                         # Check if shutdown is in the past
                         is_past = _is_shutdown_past(event_date, from_time, to_time)
                         if is_past:
-                            message_parts.append(f"   <s>🔴️ {hours}</s>")
+                            message_parts.append(f"   🔴️ <s> {hours} </s>")
                         else:
                             message_parts.append(f"   🔴️ {hours}")
                 
@@ -140,7 +140,7 @@ async def get_graphs(message: Message, bot: Bot):
     
     if not all_messages:
         return await message.reply(
-            text="Наразі немає даних про графіки відключень",
+            text="Станом на зараз дані про графіки відключень відсутні або скасовані",
             reply_markup=get_subscribe_keyboard()
         )
     
