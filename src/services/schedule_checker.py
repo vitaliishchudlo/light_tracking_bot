@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.services.api_client import ScheduleAPI
-from src.services.db import get_schedules_collection, subscriptions_collection
+from src.services.db import get_schedules_collection, subscriptions_collection, user_settings_collection
 from src.constants import QUEUES
 from aiogram import Bot
 
@@ -110,8 +110,22 @@ class ScheduleChecker:
         """
         # First time - save schedule but don't notify (return False to skip notification)
         # This prevents spamming users on first run
+        # BUT: if there are new dates with actual shutdowns, we should notify
         if not old_schedule or len(old_schedule) == 0:
-            logger.info(f"First time checking this queue or empty old schedule - saving schedule without notification. Old: {old_schedule}, New dates: {list(new_schedule.keys())}")
+            logger.info(f"First time checking this queue or empty old schedule. Old: {old_schedule}, New dates: {list(new_schedule.keys())}")
+            
+            # Check if there are new dates with actual shutdowns - if yes, notify
+            if new_schedule and len(new_schedule) > 0:
+                for date, date_data in new_schedule.items():
+                    shutdowns = date_data.get('shutdowns', [])
+                    if len(shutdowns) > 0:
+                        # Found a date with actual shutdowns - notify about it
+                        shown_dates = await self._get_shown_dates_today(queue)
+                        if date not in shown_dates:
+                            logger.info(f"First time but found new date {date} with shutdowns - will notify")
+                            return True, date, set()
+            
+            # No new dates with shutdowns, or all already shown - don't notify
             return False, None, set()
         
         # Compare by event dates and shutdowns
@@ -141,12 +155,18 @@ class ScheduleChecker:
         has_existing_changes = False
         cancelled_dates = set()  # Dates that were cancelled (had shutdowns, now empty)
         
-        for date in new_dates & old_dates:  # Only check dates that exist in both
+        # Check dates that exist in both old and new schedules
+        common_dates = new_dates & old_dates
+        logger.debug(f"Checking {len(common_dates)} common dates for changes: {list(common_dates)[:3]}")
+        
+        for date in common_dates:
             old_date_data = old_schedule.get(date, {})
             new_date_data = new_schedule.get(date, {})
             
             old_shutdowns = old_date_data.get('shutdowns', [])
             new_shutdowns = new_date_data.get('shutdowns', [])
+            
+            logger.debug(f"Date {date}: old_shutdowns={len(old_shutdowns)}, new_shutdowns={len(new_shutdowns)}")
             
             # Check if schedule was cancelled (had shutdowns, now empty)
             if len(old_shutdowns) > 0 and len(new_shutdowns) == 0:
@@ -159,7 +179,7 @@ class ScheduleChecker:
             if len(old_shutdowns) != len(new_shutdowns):
                 logger.info(f"Shutdown count changed for {date}: old={len(old_shutdowns)}, new={len(new_shutdowns)}")
                 has_existing_changes = True
-                break
+                # Don't break - continue checking other dates for changes
             
             # Compare each shutdown by creating a set of (from, to) tuples
             old_shutdown_set = {(sh.get('from'), sh.get('to')) for sh in old_shutdowns}
@@ -168,12 +188,44 @@ class ScheduleChecker:
             if old_shutdown_set != new_shutdown_set:
                 logger.info(f"Shutdown times changed for {date}: old={old_shutdown_set}, new={new_shutdown_set}")
                 has_existing_changes = True
-                break
+                # Don't break - continue checking other dates for changes
+        
+        # Check if all schedules were removed (old had dates, new is empty)
+        # Empty array [] from API means no schedules exist (not cancelled, just absent)
+        # We should NOT notify about this - just silently update the database
+        if len(old_dates) > 0 and len(new_dates) == 0:
+            logger.info(f"Empty schedule received ([]), old had {len(old_dates)} dates - silently updating DB, no notification")
+            # Don't notify - empty [] means no schedules, not cancellation
+            return False, None, set()
         
         # Check if dates were removed (but not if new dates were added)
-        if old_dates != new_dates and not new_date_added:
-            logger.info(f"Schedule dates changed: old={old_dates}, new={new_dates}")
-            has_existing_changes = True
+        # Only notify if removed dates are in the future (not past dates that naturally expired)
+        elif old_dates != new_dates and not new_date_added:
+            removed_dates = old_dates - new_dates
+            if removed_dates:
+                # Check if removed dates are in the past (naturally expired)
+                now = datetime.now()
+                all_removed_are_past = True
+                for removed_date in removed_dates:
+                    date_obj = self._parse_date(removed_date)
+                    if date_obj:
+                        # Check if the date is today or in the future
+                        # If date is today, check if it's past midnight (next day)
+                        date_only = date_obj.date()
+                        today = now.date()
+                        if date_only >= today:
+                            all_removed_are_past = False
+                            break
+                        # If date is yesterday or earlier, it's naturally expired
+                    else:
+                        # Can't parse date, assume it's not past
+                        all_removed_are_past = False
+                
+                if not all_removed_are_past:
+                    logger.info(f"Schedule dates changed: old={old_dates}, new={new_dates}")
+                    has_existing_changes = True
+                else:
+                    logger.debug(f"Removed dates {removed_dates} are in the past - not notifying (natural expiration)")
         
         # Return True if we have new date to notify OR existing changes
         if new_date_to_notify or has_existing_changes:
@@ -200,7 +252,7 @@ class ScheduleChecker:
             return None
     
     def _is_shutdown_past(self, event_date: str, shutdown_from: str, shutdown_to: str) -> bool:
-        """Check if shutdown is in the past"""
+        """Check if shutdown is in the past (ended)"""
         try:
             date_obj = self._parse_date(event_date)
             if not date_obj:
@@ -220,6 +272,8 @@ class ScheduleChecker:
                 shutdown_end += timedelta(days=1)
             
             now = datetime.now()
+            # Shutdown is past only if it has ENDED (shutdown_end < now)
+            # If shutdown_end == now or shutdown_end > now, it's still active or hasn't started
             is_past = shutdown_end < now
             logger.debug(f"Shutdown {event_date} {shutdown_from}-{shutdown_to}: end={shutdown_end}, now={now}, is_past={is_past}")
             return is_past
@@ -300,8 +354,12 @@ class ScheduleChecker:
                 if schedule and isinstance(schedule, dict) and len(schedule) > 0:
                     logger.info(f"Retrieved stored schedule for {queue}: {len(schedule)} dates - {list(schedule.keys())[:3]}")
                     return schedule
+                elif isinstance(schedule, dict) and len(schedule) == 0:
+                    # Empty schedule is valid (means no schedules exist)
+                    logger.debug(f"Retrieved empty schedule for {queue} (no schedules exist)")
+                    return None
                 else:
-                    logger.warning(f"Stored schedule for {queue} is empty or invalid: type={type(schedule)}, value={schedule}")
+                    logger.warning(f"Stored schedule for {queue} is invalid: type={type(schedule)}, value={schedule}")
                     return None
             logger.info(f"No stored schedule found for {queue} in database - document does not exist")
             return None
@@ -338,8 +396,9 @@ class ScheduleChecker:
             
             # Verify it was saved
             verify_doc = await schedules_collection.find_one({"queue": queue})
-            if verify_doc and verify_doc.get('schedule'):
-                logger.debug(f"Verified: schedule saved for {queue}, has {len(verify_doc.get('schedule', {}))} dates")
+            if verify_doc and 'schedule' in verify_doc:
+                schedule_data = verify_doc.get('schedule', {})
+                logger.debug(f"Verified: schedule saved for {queue}, has {len(schedule_data)} dates")
             else:
                 logger.error(f"❌ Failed to verify save for {queue} - doc={verify_doc}")
         except Exception as e:
@@ -404,6 +463,70 @@ class ScheduleChecker:
         
         return "\n".join(message_parts)
     
+    def _get_notification_settings(self, user_id: int) -> tuple[bool, bool]:
+        """
+        Get user notification settings
+        
+        Args:
+            user_id: Telegram user ID
+            
+        Returns:
+            Tuple of (should_notify, disable_notification)
+            - should_notify: True if notification should be sent, False otherwise
+            - disable_notification: True if notification should be silent, False otherwise
+        """
+        # Get user settings
+        user_settings = user_settings_collection.find_one({"id_telegram": user_id})
+        notification_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+        
+        # If disabled, never notify
+        if notification_mode == 'disabled':
+            return False, False
+        
+        # If always, always notify normally
+        if notification_mode == 'always':
+            return True, False
+        
+        # For night modes, check if current time is within quiet hours
+        # If yes - send silently, if no - send with sound
+        # Night modes are: 22-06, 22-08, 00-06, 00-08, 00-10
+        now = datetime.now()
+        current_hour = now.hour
+        current_minute = now.minute
+        current_time_minutes = current_hour * 60 + current_minute
+        
+        # Parse mode (e.g., "22-06" means from 22:00 to 06:00)
+        try:
+            start_hour_str, end_hour_str = notification_mode.split('-')
+            start_hour = int(start_hour_str)
+            end_hour = int(end_hour_str)
+            
+            start_time_minutes = start_hour * 60
+            end_time_minutes = end_hour * 60
+            
+            # Check if current time is within quiet hours
+            is_quiet_hours = False
+            
+            # Handle overnight periods (e.g., 22:00 to 06:00)
+            if start_hour > end_hour:
+                # Overnight: check if current time is after start OR before end
+                if current_time_minutes >= start_time_minutes or current_time_minutes < end_time_minutes:
+                    is_quiet_hours = True
+            else:
+                # Same day: check if current time is between start and end
+                if start_time_minutes <= current_time_minutes < end_time_minutes:
+                    is_quiet_hours = True
+            
+            # If in quiet hours, send silently; otherwise send with sound
+            if is_quiet_hours:
+                return True, True  # Send notification silently during quiet hours
+            else:
+                return True, False  # Send notification with sound outside quiet hours
+        except (ValueError, AttributeError):
+            # Invalid mode format, default to always notify
+            logger.warning(f"Invalid notification mode '{notification_mode}' for user {user_id}, defaulting to always")
+            return True, False
+    
     async def _notify_subscribers(self, queue: str, message: str):
         """Notify all subscribers of a queue about changes"""
         # Get all subscribers for this queue
@@ -420,16 +543,24 @@ class ScheduleChecker:
         )
         
         notified_count = 0
+        skipped_count = 0
         failed_count = 0
         
         for subscriber in subscribers:
             try:
                 user_id = subscriber.get('id_telegram')
                 if user_id:
+                    # Check if we should notify this user based on their settings
+                    should_notify, disable_notification = self._get_notification_settings(user_id)
+                    if not should_notify:
+                        skipped_count += 1
+                        continue
+                    
                     await self.bot.send_message(
                         chat_id=user_id,
                         text=message,
-                        parse_mode='HTML'
+                        parse_mode='HTML',
+                        disable_notification=disable_notification
                     )
                     notified_count += 1
                     # Small delay to avoid rate limiting
@@ -439,7 +570,7 @@ class ScheduleChecker:
                 user_id = subscriber.get('id_telegram', 'unknown')
                 logger.error(f"Failed to notify user {user_id} about queue {queue}: {e}")
         
-        logger.info(f"Notified {notified_count} subscribers about queue {queue} (failed: {failed_count})")
+        logger.info(f"Notified {notified_count} subscribers about queue {queue} (skipped: {skipped_count}, failed: {failed_count})")
     
     async def check_queue(self, queue: str) -> bool:
         """
@@ -454,13 +585,19 @@ class ScheduleChecker:
         try:
             # Fetch current schedule from API
             schedule_data = await self.api_client.fetch_schedule(queue)
-            
-            if not schedule_data:
+            # Handle empty array response (no schedules for today/tomorrow)
+            # Empty array [] means no schedules exist (not cancelled, just absent)
+            # We will silently update the database without notifications
+            if schedule_data == []:
+                logger.info(f"Empty schedule received for queue {queue} - no schedules exist")
+                # Normalize empty schedule (will result in empty dict)
+                new_schedule = {}
+            elif not schedule_data:
                 logger.warning(f"No data received for queue {queue}")
                 return False
-            
-            # Normalize the schedule
-            new_schedule = self._normalize_schedule(schedule_data, queue)
+            else:
+                # Normalize the schedule
+                new_schedule = self._normalize_schedule(schedule_data, queue)
             logger.debug(f"Fetched schedule for {queue}: {len(new_schedule)} dates")
             
             # Get stored schedule
@@ -510,11 +647,22 @@ class ScheduleChecker:
                 # Prepare schedule to show in notification
                 if cancelled_dates:
                     logger.info(f"Schedule cancelled for {queue} on dates: {cancelled_dates}")
-                    # Show cancelled dates
-                    cancelled_schedule = {date: new_schedule[date] for date in cancelled_dates}
+                    # Show cancelled dates - use old_schedule data since new_schedule might be empty
+                    cancelled_schedule = {}
+                    for date in cancelled_dates:
+                        # Try to get from new_schedule first, fallback to old_schedule
+                        if date in new_schedule:
+                            cancelled_schedule[date] = new_schedule[date]
+                        elif old_schedule and date in old_schedule:
+                            # Use old schedule data but mark as cancelled (empty shutdowns)
+                            cancelled_schedule[date] = {
+                                **old_schedule[date],
+                                'shutdowns': []  # Mark as cancelled
+                            }
                     # Also include changed dates if any
                     for date in changed_dates:
-                        cancelled_schedule[date] = new_schedule[date]
+                        if date in new_schedule:
+                            cancelled_schedule[date] = new_schedule[date]
                     message = self._format_notification_message(queue, cancelled_schedule, None, cancelled_dates)
                 elif new_date:
                     logger.info(f"New date appeared for {queue}: {new_date} - notifying subscribers")

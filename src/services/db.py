@@ -10,6 +10,7 @@ mongodb_url = os.getenv('MONGODB_URL', 'mongodb://localhost:27017/')
 sync_client = MongoClient(mongodb_url)
 sync_db = sync_client['light_tracker_db']
 subscriptions_collection = sync_db['subscriptions']
+user_settings_collection = sync_db['user_settings']
 
 # Create indexes for subscriptions (with background=True to avoid blocking)
 try:
@@ -18,6 +19,11 @@ except Exception:
     pass  # Index might already exist
 try:
     subscriptions_collection.create_index([("id_telegram", 1), ("group_number", 1)], background=True)
+except Exception:
+    pass  # Index might already exist
+# Create index for user settings
+try:
+    user_settings_collection.create_index([("id_telegram", 1)], unique=True, background=True)
 except Exception:
     pass  # Index might already exist
 

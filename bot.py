@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 
 from config import Config, load_config
 from src.callbacks import callback_handler
-from src.handlers import echo, start, get_graphs
+from src.handlers import echo, start, get_graphs, notification_settings
 from src.services.db import init_db, close_db
 from src.services.schedule_checker import ScheduleChecker
 
@@ -60,6 +60,7 @@ async def main():
         start.router,
         callback_handler.router,
         get_graphs.router,
+        notification_settings.router,
         #  Other routers
 
         echo.router,
