@@ -9,8 +9,7 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements/ requirements/
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements/production.txt && \
-    rm -rf requirements
+    pip install --no-cache-dir -r requirements/production.txt
 
 # Copy application code
 COPY . .

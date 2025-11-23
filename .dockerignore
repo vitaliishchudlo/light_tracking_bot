@@ -45,13 +45,11 @@ Dockerfile
 docker-compose.yml
 .dockerignore
 
-# Old images
-graphs_images/
-
 # Tests
 .pytest_cache/
 .coverage
 htmlcov/
+src/tests/
 
 # Logs
 *.log

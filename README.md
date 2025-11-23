@@ -1,59 +1,185 @@
-# I will add more info in the future
-# . . . . . . . . . . . . . . . . . .
-# AIOgram Telegram Bot Template
+# Svitlo Bot - Telegram бот для відстеження відключень світла в Івано-Франківську
 
-A simple structure for creating telegram bots using AIOgram 3.
+![Python](https://img.shields.io/badge/python-3.12-blue.svg?logo=python&logoColor=yellow) ![aiogram](https://img.shields.io/badge/aiogram-3.0+-blue.svg?logo=telegram) ![MongoDB](https://img.shields.io/badge/MongoDB-7.0-green.svg?logo=mongodb)
 
----
-***Readme template:***
+Telegram бот для автоматичного відстеження та сповіщення про зміни в графіках відключень світла в місті Івано-Франківськ.
 
-# [project name]
+## ✨ Можливості
 
-![aiogram](https://img.shields.io/badge/python-v3.10-blue.svg?logo=python&logoColor=yellow) ![aiogram](https://img.shields.io/badge/aiogram-v3-blue.svg?logo=telegram) ![License](https://img.shields.io/badge/license-MIT-blue.svg)
+- 🔔 **Автоматичні сповіщення** про зміни в графіках відключень світла
+- 📊 **Підписка на черги** - користувачі можуть підписуватися на конкретні черги (1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2)
+- ⚙️ **Налаштування сповіщень**:
+  - Завжди (всі сповіщення зі звуком)
+  - Нічний режим (беззвучно в зазначений період, зі звуком поза ним)
+  - Вимкнути (не отримувати сповіщення)
+- 📅 **Перегляд графіків** - користувачі можуть переглядати актуальні графіки для своїх підписок
+- ⏰ **Розумне викреслення** - минулі відключення автоматично викреслюються
+- 🔄 **Автоматична перевірка** - графіки перевіряються кожну хвилину
 
-About...
+## 🚀 Швидкий старт
 
-## Features
+### Вимоги
 
-The bot provides the following features:
+- Python 3.12+
+- MongoDB 7.0+ (або Docker для автоматичного запуску)
+- Telegram Bot Token (отримайте від [@BotFather](https://t.me/BotFather))
 
--
--
+### Встановлення
 
-## Commands
+1. **Клонуйте репозиторій:**
+   ```bash
+   git clone <repository-url>
+   cd light_tracking_bot
+   ```
 
-The bot has several commands that can be used to access its features:
+2. **Створіть віртуальне середовище:**
+   ```bash
+   python -m venv venv
+   # Windows
+   venv\Scripts\activate
+   # Linux/Mac
+   source venv/bin/activate
+   ```
 
-- `/start`: Sends a ...
-- `/help`: Sends a ...
+3. **Встановіть залежності:**
+   ```bash
+   pip install -r requirements/local.txt
+   ```
 
-## Requirements
+4. **Налаштуйте конфігурацію:**
+   ```bash
+   cp .env.dist .env
+   # Відредагуйте .env та додайте ваш BOT_TOKEN
+   ```
 
-- Python v3.10
-- aiogram v3
-- dotenv v1
+5. **Запустіть MongoDB:**
+   - **Локально:** встановіть MongoDB та запустіть сервіс
+   - **Docker:** використовуйте `docker-compose up -d mongodb`
 
-## Installation
+6. **Запустіть бота:**
+   ```bash
+   python bot.py
+   ```
 
-To get started with this bot, follow these steps:
+## 🐳 Docker (Рекомендовано для продакшену)
 
-- Clone this repository to your local machine.
+### Запуск з Docker Compose
 
-    ```
-    $ git clone [source]
-    ```
+1. **Створіть `.env` файл:**
+   ```bash
+   cp .env.dist .env
+   # Додайте ваш BOT_TOKEN
+   ```
 
-- Create a virtual environment, activate it and install required dependencies.
+2. **Запустіть всі сервіси:**
+   ```bash
+   docker-compose up -d
+   ```
 
-    ```
-    $ python3.10 -m venv env
-    $ source env/bin/activate
-    $ pip install -r requirements/local.txt
-    ```
+3. **Перегляд логів:**
+   ```bash
+   docker-compose logs -f bot-app
+   ```
 
-- Create a new bot on Telegram by talking to the BotFather, and [obtain the API token](https://www.siteguarding.com/en/how-to-get-telegram-bot-api-token).
+Детальні інструкції дивіться в [DOCKER_SETUP.md](DOCKER_SETUP.md)
 
-- Rename the file `.env.dist` to `.env` and replace the placeholders with required data.
+## 📋 Команди бота
 
-- Run the bot using `python bot.py`.
+- `/start` - Початок роботи з ботом, показує головне меню
+- **📊 Мої графіки 📅** - Перегляд актуальних графіків для ваших підписок
+- **⚙ Налаштування черг ⚡** - Підписка/відписка на черги
+- **⚙ Налаштування сповіщень 🔔** - Налаштування режиму сповіщень
 
+## 🏗️ Архітектура
+
+```
+light_tracking_bot/
+├── bot.py                 # Точка входу
+├── config/               # Конфігурація
+├── src/
+│   ├── handlers/         # Обробники команд та повідомлень
+│   ├── callbacks/        # Обробники inline кнопок
+│   ├── keyboards/        # Клавіатури
+│   ├── services/         # Бізнес-логіка
+│   │   ├── api_client.py      # Клієнт для API графіків
+│   │   ├── db.py              # Робота з MongoDB
+│   │   └── schedule_checker.py # Перевірка змін графіків
+│   ├── constants.py      # Константи
+│   └── tests/            # Тести
+├── requirements/         # Залежності
+├── docker-compose.yml    # Docker Compose конфігурація
+└── Dockerfile            # Docker образ
+```
+
+## 🔧 Налаштування
+
+### Змінні оточення
+
+- `BOT_TOKEN` - Токен Telegram бота (обов'язково)
+- `MONGODB_URL` - URL MongoDB (опціонально, за замовчуванням: `mongodb://localhost:27017/`)
+
+### Режими сповіщень
+
+- **Завжди** - всі сповіщення зі звуком
+- **22:00 - 06:00 🌙** - беззвучно з 22:00 до 06:00, зі звуком в інший час
+- **22:00 - 08:00 🌙** - беззвучно з 22:00 до 08:00, зі звуком в інший час
+- **00:00 - 06:00 🌙** - беззвучно з 00:00 до 06:00, зі звуком в інший час
+- **00:00 - 08:00 🌙** - беззвучно з 00:00 до 08:00, зі звуком в інший час
+- **00:00 - 10:00 🌙** - беззвучно з 00:00 до 10:00, зі звуком в інший час
+- **Вимкнути 🚫** - не отримувати сповіщення
+
+## 🧪 Тестування
+
+```bash
+# Встановіть тестові залежності
+pip install -r requirements/test.txt
+
+# Запустіть тести
+pytest src/tests/ -v
+```
+
+Детальніше про тести дивіться в [src/tests/README.md](src/tests/README.md)
+
+## 📝 API
+
+Бот використовує API для отримання графіків:
+- URL: `https://be-svitlo.oe.if.ua/schedule-by-queue?queue={queue_number}`
+- Формат: JSON з датами та відключеннями
+
+## 🔄 Як працює бот
+
+1. **Перевірка графіків** - кожну хвилину бот перевіряє всі черги на наявність змін
+2. **Виявлення змін** - порівнює нові дані зі збереженими в MongoDB
+3. **Сповіщення** - надсилає сповіщення підписникам про:
+   - З'явлення нового графіку на завтра
+   - Зміни в існуючих графіках
+   - Скасування графіків
+4. **Збереження** - зберігає актуальні графіки в MongoDB
+
+## 🛠️ Розробка
+
+### Структура проекту
+
+- `src/handlers/` - обробники команд та повідомлень
+- `src/callbacks/` - обробники callback запитів від inline кнопок
+- `src/services/` - основна бізнес-логіка
+- `src/keyboards/` - клавіатури для користувачів
+
+### Додавання нової функціональності
+
+1. Створіть handler в `src/handlers/`
+2. Додайте router в `bot.py`
+3. Додайте клавіатури в `src/keyboards/` якщо потрібно
+4. Додайте тести в `src/tests/`
+
+## 📄 Ліцензія
+
+MIT
+
+## 👤 Автор
+
+Розроблено для відстеження відключень світла в Івано-Франківську
+
+## 🤝 Внесок
+
+Всі пропозиції та звіти про помилки вітаються!
