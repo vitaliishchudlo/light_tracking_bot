@@ -34,10 +34,10 @@ class ScheduleChecker:
             raise RuntimeError("schedules_collection is not initialized. Call init_db() first.")
         
         self.is_running = True
-        # Run every minute
+        # Run every 5 minutes to reduce API load
         self.scheduler.add_job(
             self.check_all_queues,
-            trigger=IntervalTrigger(minutes=1),
+            trigger=IntervalTrigger(minutes=5),
             id='check_schedules',
             replace_existing=True
         )
@@ -704,8 +704,8 @@ class ScheduleChecker:
         
         for queue in QUEUES:
             await self.check_queue(queue)
-            # Small delay between queues
-            await asyncio.sleep(0.2)
+            # Delay between API calls for different queues to avoid bursts
+            await asyncio.sleep(10)
         
         logger.info("Finished schedule check for all queues")
 
