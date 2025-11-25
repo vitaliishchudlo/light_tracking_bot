@@ -7,18 +7,38 @@ from aiogram.enums import ParseMode
 
 from config import Config, load_config
 from src.callbacks import callback_handler
-from src.handlers import echo, start, get_graphs
-
-# from src.services.db import subscriptions_collection, user_notifications_collection, outage_groups_collection
-# ToDo Maybe delete this import in future
+from src.handlers import echo, start, get_graphs, notification_settings
+from src.services.db import init_db, close_db
+from src.services.schedule_checker import ScheduleChecker
 
 
 logger = logging.getLogger(__name__)
 
+# Global schedule checker instance
+schedule_checker: ScheduleChecker = None
+
 
 async def on_startup(bot: Bot):
-    pass
-    # TODO Implement here creating of all the graphs images and saving them to the filesystem
+    """Initialize services on bot startup"""
+    global schedule_checker
+    
+    logger.info("Initializing database...")
+    await init_db()
+    
+    logger.info("Starting schedule checker...")
+    schedule_checker = ScheduleChecker(bot)
+    await schedule_checker.start()
+
+
+async def on_shutdown(bot: Bot):
+    """Cleanup on bot shutdown"""
+    global schedule_checker
+    
+    if schedule_checker:
+        await schedule_checker.stop()
+    
+    await close_db()
+    logger.info("Bot shutdown complete")
 
 
 async def main():
@@ -40,11 +60,13 @@ async def main():
         start.router,
         callback_handler.router,
         get_graphs.router,
+        notification_settings.router,
         #  Other routers
 
         echo.router,
     ))
     dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)

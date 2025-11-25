@@ -24,7 +24,6 @@ wheels/
 venv/
 env/
 ENV/
-.venv
 
 # IDE
 .vscode/
@@ -36,25 +35,21 @@ ENV/
 # Environment
 .env
 .env.local
-.env.*.local
 
 # Git
 .git/
+.gitignore
 
-# Logs
-*.log
-logs/
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
 
 # Tests
 .pytest_cache/
 .coverage
 htmlcov/
-.tox/
+src/tests/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# MongoDB
-*.db
-*.sqlite
+# Logs
+*.log

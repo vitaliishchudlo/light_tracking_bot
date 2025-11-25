@@ -3,8 +3,9 @@ from aiogram.types import KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-from src.constants import GROUPS_NUMBERS
-from src.services.db import subscriptions_collection
+from src.constants import QUEUES
+from src.services.db import subscriptions_collection, user_settings_collection
+from typing import List
 
 
 def get_subscribe_keyboard():
@@ -12,6 +13,7 @@ def get_subscribe_keyboard():
 
     builder.row(KeyboardButton(text="📊 Мої графіки 📅"))
     builder.row(KeyboardButton(text="⚙ Налаштування черг ⚡"))
+    builder.row(KeyboardButton(text="⚙ Налаштування сповіщень 🔔"))
 
     keyboard = builder.as_markup(resize_keyboard=True, one_time_keyboard=False)
 
@@ -21,19 +23,59 @@ def get_subscribe_keyboard():
 def get_group_keyboard(user_id: int):
     builder = InlineKeyboardBuilder()
 
-    user_subscriptions = subscriptions_collection.find({"id_telegram": user_id})
-    subscribed_groups = [sub['group_number'] for sub in user_subscriptions]
+    user_subscriptions = list(subscriptions_collection.find({"id_telegram": user_id}))
+    # Support both old 'group_number' and new 'queue' field names
+    subscribed_queues = [sub.get('queue') or sub.get('group_number') for sub in user_subscriptions if sub.get('queue') or sub.get('group_number')]
 
-    for number in GROUPS_NUMBERS:
-        text = f"✅ {number}" if number in subscribed_groups else number
+    for queue in QUEUES:
+        text = f"✅ {queue}" if queue in subscribed_queues else queue
 
         button = InlineKeyboardButton(text=text,
-                                      callback_data=f"group_unsubscribe_{number}" if number in subscribed_groups else f"group_subscribe_{number}")
+                                      callback_data=f"queue_unsubscribe_{queue}" if queue in subscribed_queues else f"queue_subscribe_{queue}")
         builder.add(button)
 
-    builder.add(InlineKeyboardButton(text="Отримати графіки для моїх груп", callback_data=f"get_my_graphs"))
+    # Adjust the rows: 2 columns for each row
+    builder.adjust(2, 2, 2, 2, 2, 2)
 
-    # Adjust the rows (optional, based on your desired layout)
-    builder.adjust(2, 2, 2, 2, 2, 5, 1)
+    return builder.as_markup()
 
+
+def get_notification_settings_keyboard(user_id: int):
+    """Create inline keyboard for notification settings"""
+    builder = InlineKeyboardBuilder()
+    
+    # Get current user settings
+    user_settings = user_settings_collection.find_one({"id_telegram": user_id})
+    current_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+    
+    # Define notification modes (emojis at the end)
+    modes = [
+        ('always', 'Завжди'),
+        ('22-06', '22:00 - 06:00 🌙'),
+        ('22-08', '22:00 - 08:00 🌙'),
+        ('00-06', '00:00 - 06:00 🌙'),
+        ('00-08', '00:00 - 08:00 🌙'),
+        ('00-10', '00:00 - 10:00 🌙'),
+        ('disabled', 'Вимкнути 🚫')
+    ]
+    
+    # Add buttons with checkmark for current mode
+    for mode, label in modes:
+        if mode == current_mode:
+            text = f"✅ {label}"
+        else:
+            text = label
+        builder.add(InlineKeyboardButton(
+            text=text,
+            callback_data=f"notification_mode_{mode}"
+        ))
+    
+    # Layout according to user requirements:
+    # Row 1: "Завжди" (1 button)
+    # Row 2: "22:00-06:00" та "22:00-08:00" (2 buttons)
+    # Row 3: "00:00-06:00", "00:00-08:00" (2 buttons)
+    # Row 4: "00:00-10:00" (1 button)
+    # Row 5: "Вимкнути" (1 button)
+    builder.adjust(1, 2, 2, 1, 1)
+    
     return builder.as_markup()
