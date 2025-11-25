@@ -420,9 +420,16 @@ class ScheduleChecker:
         if cancelled_dates is None:
             cancelled_dates = set()
         
-        # Check if all dates in schedule are cancelled
+        # Check if all dates in schedule are effectively cancelled
+        # We treat a date as cancelled if it has no shutdowns (empty list) or explicitly listed in cancelled_dates
         sorted_dates = sorted(schedule.keys())
-        all_cancelled = all(date in cancelled_dates for date in sorted_dates) and len(sorted_dates) > 0
+        all_cancelled = (
+            len(sorted_dates) > 0
+            and all(
+                (len(schedule[date].get('shutdowns', [])) == 0) or (date in cancelled_dates)
+                for date in sorted_dates
+            )
+        )
         
         if all_cancelled:
             # All dates are cancelled - show cancellation message
@@ -436,10 +443,11 @@ class ScheduleChecker:
         for date in sorted_dates:
             date_data = schedule[date]
             shutdowns = date_data.get('shutdowns', [])
-            is_cancelled = date in cancelled_dates
+            # Consider a date cancelled if it has no shutdowns or explicitly marked as cancelled
+            is_cancelled = (len(shutdowns) == 0) or (date in cancelled_dates)
             
             if is_cancelled:
-                # Show cancellation message for this date
+                # Show cancellation/absence message for this date
                 message_parts.append(f"\n\n📅 {date}")
                 message_parts.append(f"   💡 <b>Графік скасовано</b> ⚡️")
             elif shutdowns:
@@ -564,7 +572,7 @@ class ScheduleChecker:
                     )
                     notified_count += 1
                     # Small delay to avoid rate limiting
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.1)
             except Exception as e:
                 failed_count += 1
                 user_id = subscriber.get('id_telegram', 'unknown')
@@ -705,7 +713,7 @@ class ScheduleChecker:
         for queue in QUEUES:
             await self.check_queue(queue)
             # Delay between API calls for different queues to avoid bursts
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
         
         logger.info("Finished schedule check for all queues")
 
