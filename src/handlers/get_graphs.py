@@ -104,8 +104,14 @@ async def get_graphs(message: Message, bot: Bot):
             
             # Sort by event date
             sorted_dates = sorted(schedule.keys())
+            today = datetime.now().date()
             
             for event_date in sorted_dates:
+                # Skip dates that are fully in the past (previous days)
+                date_obj = _parse_date(event_date)
+                if date_obj and date_obj.date() < today:
+                    continue
+
                 date_data = schedule.get(event_date, {})
                 shutdowns = date_data.get('shutdowns', [])
                 
