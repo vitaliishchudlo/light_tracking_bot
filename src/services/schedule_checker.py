@@ -37,7 +37,7 @@ class ScheduleChecker:
         # Run every 5 minutes to reduce API load
         self.scheduler.add_job(
             self.check_all_queues,
-            trigger=IntervalTrigger(minutes=5),
+            trigger=IntervalTrigger(minutes=1),
             id='check_schedules',
             replace_existing=True
         )
@@ -111,6 +111,8 @@ class ScheduleChecker:
         # First time - save schedule but don't notify (return False to skip notification)
         # This prevents spamming users on first run
         # BUT: if there are new dates with actual shutdowns, we should notify
+        # IMPORTANT: If old_schedule is empty and new_schedule is also empty ([] from API),
+        # this means "no schedules exist" - not a cancellation, just update DB silently
         if not old_schedule or len(old_schedule) == 0:
             logger.info(f"First time checking this queue or empty old schedule. Old: {old_schedule}, New dates: {list(new_schedule.keys())}")
             
@@ -125,7 +127,7 @@ class ScheduleChecker:
                             logger.info(f"First time but found new date {date} with shutdowns - will notify")
                             return True, date, set()
             
-            # No new dates with shutdowns, or all already shown - don't notify
+            # No new dates with shutdowns, or all already shown, or empty [] - don't notify
             return False, None, set()
         
         # Compare by event dates and shutdowns
@@ -190,42 +192,66 @@ class ScheduleChecker:
                 has_existing_changes = True
                 # Don't break - continue checking other dates for changes
         
-        # Check if all schedules were removed (old had dates, new is empty)
-        # Empty array [] from API means no schedules exist (not cancelled, just absent)
-        # We should NOT notify about this - just silently update the database
-        if len(old_dates) > 0 and len(new_dates) == 0:
-            logger.info(f"Empty schedule received ([]), old had {len(old_dates)} dates - silently updating DB, no notification")
-            # Don't notify - empty [] means no schedules, not cancellation
-            return False, None, set()
+        # Check for removed dates (dates that were in old but not in new)
+        # This handles cases like: old had [today, tomorrow], new has only [tomorrow] (today was cancelled)
+        removed_dates = old_dates - new_dates
+        now = datetime.now()
+        today = now.date()
         
-        # Check if dates were removed (but not if new dates were added)
-        # Only notify if removed dates are in the future (not past dates that naturally expired)
-        elif old_dates != new_dates and not new_date_added:
-            removed_dates = old_dates - new_dates
-            if removed_dates:
-                # Check if removed dates are in the past (naturally expired)
-                now = datetime.now()
-                all_removed_are_past = True
-                for removed_date in removed_dates:
-                    date_obj = self._parse_date(removed_date)
-                    if date_obj:
-                        # Check if the date is today or in the future
-                        # If date is today, check if it's past midnight (next day)
-                        date_only = date_obj.date()
-                        today = now.date()
-                        if date_only >= today:
-                            all_removed_are_past = False
-                            break
-                        # If date is yesterday or earlier, it's naturally expired
+        if removed_dates:
+            # Check which removed dates are today or in the future (should be notified as cancelled)
+            for removed_date in removed_dates:
+                date_obj = self._parse_date(removed_date)
+                if date_obj:
+                    date_only = date_obj.date()
+                    # If date is today or in the future, it's a cancellation
+                    if date_only >= today:
+                        # Check if this date had shutdowns (was a real schedule, not just empty)
+                        old_date_data = old_schedule.get(removed_date, {})
+                        old_shutdowns = old_date_data.get('shutdowns', [])
+                        if len(old_shutdowns) > 0:
+                            logger.info(f"Date {removed_date} was removed and had shutdowns - marking as cancelled")
+                            cancelled_dates.add(removed_date)
+                            has_existing_changes = True
                     else:
-                        # Can't parse date, assume it's not past
-                        all_removed_are_past = False
-                
-                if not all_removed_are_past:
-                    logger.info(f"Schedule dates changed: old={old_dates}, new={new_dates}")
-                    has_existing_changes = True
+                        logger.debug(f"Removed date {removed_date} is in the past - not notifying (natural expiration)")
                 else:
-                    logger.debug(f"Removed dates {removed_dates} are in the past - not notifying (natural expiration)")
+                    # Can't parse date, assume it's a cancellation to be safe
+                    old_date_data = old_schedule.get(removed_date, {})
+                    old_shutdowns = old_date_data.get('shutdowns', [])
+                    if len(old_shutdowns) > 0:
+                        logger.warning(f"Removed date {removed_date} couldn't be parsed, but had shutdowns - marking as cancelled")
+                        cancelled_dates.add(removed_date)
+                        has_existing_changes = True
+        
+        # Check if all schedules were removed (old had dates, new is empty)
+        # Empty array [] from API - check if any old dates were today or in the future
+        # IMPORTANT: If old dates are all in the past, [] just means "no schedules exist" (not cancellation)
+        # Only notify if there were schedules for today/future that got cancelled
+        if len(old_dates) > 0 and len(new_dates) == 0:
+            # Check if any old dates are today or in the future
+            has_future_dates = False
+            for old_date in old_dates:
+                date_obj = self._parse_date(old_date)
+                if date_obj:
+                    date_only = date_obj.date()
+                    if date_only >= today:
+                        old_date_data = old_schedule.get(old_date, {})
+                        old_shutdowns = old_date_data.get('shutdowns', [])
+                        if len(old_shutdowns) > 0:
+                            has_future_dates = True
+                            cancelled_dates.add(old_date)
+                            break
+            
+            if has_future_dates:
+                # There were schedules for today or future that got cancelled
+                logger.info(f"Empty schedule received ([]), but old had {len(old_dates)} dates with future schedules - notifying cancellation")
+                has_existing_changes = True
+            else:
+                # All old dates were in the past, just natural expiration
+                # [] means "no schedules exist" - not a cancellation, just update DB silently
+                logger.info(f"Empty schedule received ([]), old had {len(old_dates)} dates but all in the past - silently updating DB, no notification")
+                return False, None, set()
         
         # Return True if we have new date to notify OR existing changes
         if new_date_to_notify or has_existing_changes:
@@ -656,22 +682,24 @@ class ScheduleChecker:
                 if cancelled_dates:
                     logger.info(f"Schedule cancelled for {queue} on dates: {cancelled_dates}")
                     # Show cancelled dates - use old_schedule data since new_schedule might be empty
-                    cancelled_schedule = {}
+                    notification_schedule = {}
+                    
+                    # Add cancelled dates (use old_schedule data, mark as cancelled)
                     for date in cancelled_dates:
-                        # Try to get from new_schedule first, fallback to old_schedule
-                        if date in new_schedule:
-                            cancelled_schedule[date] = new_schedule[date]
-                        elif old_schedule and date in old_schedule:
+                        if old_schedule and date in old_schedule:
                             # Use old schedule data but mark as cancelled (empty shutdowns)
-                            cancelled_schedule[date] = {
+                            notification_schedule[date] = {
                                 **old_schedule[date],
                                 'shutdowns': []  # Mark as cancelled
                             }
-                    # Also include changed dates if any
-                    for date in changed_dates:
-                        if date in new_schedule:
-                            cancelled_schedule[date] = new_schedule[date]
-                    message = self._format_notification_message(queue, cancelled_schedule, None, cancelled_dates)
+                    
+                    # Also include all dates from new_schedule (non-cancelled dates)
+                    for date in new_schedule:
+                        if date not in cancelled_dates:
+                            notification_schedule[date] = new_schedule[date]
+                    
+                    # If there are cancelled dates, don't highlight new_date separately - show as changes
+                    message = self._format_notification_message(queue, notification_schedule, None if cancelled_dates else new_date, cancelled_dates)
                 elif new_date:
                     logger.info(f"New date appeared for {queue}: {new_date} - notifying subscribers")
                     # Mark this date as shown
@@ -713,7 +741,7 @@ class ScheduleChecker:
         for queue in QUEUES:
             await self.check_queue(queue)
             # Delay between API calls for different queues to avoid bursts
-            await asyncio.sleep(5)
+            # await asyncio.sleep(5)
         
         logger.info("Finished schedule check for all queues")
 
