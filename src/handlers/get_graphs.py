@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 router: Router = Router()
 
 
-@router.message(F.text == '⚙ Налаштування черг ⚡')
+@router.message(F.text == 'Налаштування груп 👥')
 async def show_queue_settings(message: Message, bot: Bot):
     await bot.send_message(
         chat_id=message.chat.id,
@@ -21,7 +21,7 @@ async def show_queue_settings(message: Message, bot: Bot):
     )
 
 
-@router.message(F.text == '📊 Мої графіки 📅')
+@router.message(F.text == 'Мої графіки ⚡️')
 async def get_graphs(message: Message, bot: Bot):
     user_id = message.from_user.id
 
@@ -99,31 +99,28 @@ async def get_graphs(message: Message, bot: Bot):
             # Get stored schedule from database
             doc = await schedules_collection.find_one({"queue": queue})
             
-            if not doc or not doc.get('schedule'):
-                logger.debug(f"No schedule data in DB for queue {queue}")
-                continue
-            
-            schedule = doc.get('schedule', {})
-            if not schedule or not isinstance(schedule, dict):
-                continue
-            
             # Format message for this queue
-            message_parts = [f"💡 <b>Графік для черги <u>{queue}</u></b>"]
+            message_parts = [f"Графік для черги {queue}💡"]
+            
+            # Check if schedule exists
+            schedule = {}
+            if doc and doc.get('schedule'):
+                schedule = doc.get('schedule', {})
+                if not isinstance(schedule, dict):
+                    schedule = {}
             
             # Sort by event date
-            sorted_dates = sorted(schedule.keys())
+            sorted_dates = sorted(schedule.keys()) if schedule else []
             today = datetime.now().date()
             
-            # Filter out past dates first
+            # Collect all dates (including cancelled ones) for today and future
             valid_dates = []
             for event_date in sorted_dates:
                 date_obj = _parse_date(event_date)
                 if date_obj and date_obj.date() < today:
                     continue
-                date_data = schedule.get(event_date, {})
-                shutdowns = date_data.get('shutdowns', [])
-                if shutdowns:
-                    valid_dates.append(event_date)
+                # Include date even if shutdowns is empty (cancelled)
+                valid_dates.append(event_date)
             
             def _calculate_duration(from_time_str: str, to_time_str: str) -> str:
                 """Calculate duration between two times and return formatted string like 'на 2 год 30хв'"""
@@ -158,54 +155,58 @@ async def get_graphs(message: Message, bot: Bot):
                     logger.error(f"Error calculating duration: {e}")
                     return ""
             
-            for event_date in valid_dates:
-                date_data = schedule.get(event_date, {})
-                shutdowns = date_data.get('shutdowns', [])
-                
-                message_parts.append(f"\n\n📅 {event_date}\n")
-                
-                # Each shutdown in separate blockquote
-                for shutdown in shutdowns:
-                    hours = shutdown.get('shutdownHours', '')
-                    from_time = shutdown.get('from', '')
-                    to_time = shutdown.get('to', '')
+            if valid_dates:
+                # There are dates (active or cancelled) for this queue
+                for event_date in valid_dates:
+                    date_data = schedule.get(event_date, {})
+                    shutdowns = date_data.get('shutdowns', [])
                     
-                    if hours and from_time and to_time:
-                        # Format hours with spaces: "10:30 - 13:30"
-                        hours_formatted = hours.replace('-', ' - ')
-                        
-                        # Calculate duration
-                        duration = _calculate_duration(from_time, to_time)
-                        duration_text = f" – (<u>{duration}</u>)" if duration else ""
-                        
-                        # Check if shutdown is in the past
-                        is_past = _is_shutdown_past(event_date, from_time, to_time)
-                        
-                        if is_past:
-                            # Past shutdown: white circle and strikethrough everything
-                            shutdown_line = f"⚪️ {hours_formatted}{duration_text}"
-                            message_parts.append(f"<blockquote><s>{shutdown_line}</s></blockquote>")
-                        else:
-                            # Active shutdown: red circle
-                            shutdown_line = f"🔴️ {hours_formatted}{duration_text}"
-                            message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
-                
-                approved_since = date_data.get('scheduleApprovedSince')
-                if approved_since:
-                    message_parts.append(f"\n📌 Оновлено: {approved_since}")
+                    message_parts.append(f"\n📅 {event_date}")
+                    
+                    if not shutdowns:
+                        # No shutdowns - schedule is cancelled (green circle)
+                        message_parts.append(f"<blockquote>🟢 Графік скасовано ⚡️</blockquote>")
+                    else:
+                        # Each shutdown in separate blockquote
+                        for shutdown in shutdowns:
+                            hours = shutdown.get('shutdownHours', '')
+                            from_time = shutdown.get('from', '')
+                            to_time = shutdown.get('to', '')
+                            
+                            if hours and from_time and to_time:
+                                # Format hours with spaces: "10:30 - 13:30"
+                                hours_formatted = hours.replace('-', ' - ')
+                                
+                                # Calculate duration
+                                duration = _calculate_duration(from_time, to_time)
+                                duration_text = f" – (<i>{duration}</i>)" if duration else ""
+                                
+                                # Check if shutdown is in the past
+                                is_past = _is_shutdown_past(event_date, from_time, to_time)
+                                
+                                if is_past:
+                                    # Past shutdown: white circle and strikethrough everything
+                                    shutdown_line = f"⚪️ {hours_formatted}{duration_text}"
+                                    message_parts.append(f"<blockquote><s>{shutdown_line}</s></blockquote>")
+                                else:
+                                    # Active shutdown: red circle
+                                    shutdown_line = f"🔴 {hours_formatted}{duration_text}"
+                                    message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
+            else:
+                # No schedule data or all dates are in the past - show that there's no schedule
+                today_str = datetime.now().strftime('%d.%m.%Y')
+                message_parts.append(f"\n📅 {today_str}")
+                message_parts.append(f"<blockquote>🟢 Графік відсутній</blockquote>")
             
-            if len(message_parts) > 1:  # More than just the header
-                all_messages.append("\n".join(message_parts))
+            # Always add message for this queue (even if no schedule)
+            all_messages.append("\n".join(message_parts))
         
         except Exception as e:
             logger.error(f"Error fetching schedule from DB for queue {queue}: {e}", exc_info=True)
             continue
     
-    if not all_messages:
-        return await message.reply(
-            text="Станом на зараз дані про графіки відключень відсутні або скасовані",
-            reply_markup=get_subscribe_keyboard()
-        )
+    # all_messages will always contain at least one message per queue now
+    # (we removed the check that skipped queues without schedules)
     
     # Send messages
     for i, msg_text in enumerate(all_messages):

@@ -11,9 +11,9 @@ from typing import List
 def get_subscribe_keyboard():
     builder = ReplyKeyboardBuilder()
 
-    builder.row(KeyboardButton(text="📊 Мої графіки 📅"))
-    builder.row(KeyboardButton(text="⚙ Налаштування черг ⚡"))
-    builder.row(KeyboardButton(text="⚙ Налаштування сповіщень 🔔"))
+    builder.row(KeyboardButton(text="Мої графіки ⚡️"))
+    builder.row(KeyboardButton(text="Налаштування груп 👥"))
+    builder.row(KeyboardButton(text="Налаштування сповіщень🔔"))
 
     keyboard = builder.as_markup(resize_keyboard=True, one_time_keyboard=False)
 

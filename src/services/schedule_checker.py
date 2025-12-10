@@ -492,11 +492,11 @@ class ScheduleChecker:
         
         if all_cancelled:
             # All dates are cancelled - show cancellation message
-            message_parts = [f"🚫 <b>Скасовано графік для черги <u>{queue}</u></b>"]
+            message_parts = [f"Скасовано графік для черги {queue} 🚫"]
         elif new_date:
-            message_parts = [f"🔔 <b>З'явився графік на <u>{new_date}</u> для черги <u>{queue}</u></b>"]
+            message_parts = [f"З'явився графік на {new_date} для черги {queue} 🔔"]
         else:
-            message_parts = [f"🔔 <b>Зміни у графіку для черги <u>{queue}</u></b> ❗"]
+            message_parts = [f"Зміни у графіку для черги {queue} ❗️"]
 
         # Sort dates
         for date in sorted_dates:
@@ -505,12 +505,12 @@ class ScheduleChecker:
             # Consider a date cancelled if it has no shutdowns or explicitly marked as cancelled
             is_cancelled = (len(shutdowns) == 0) or (date in cancelled_dates)
             
+            message_parts.append(f"\n📅 {date}")
+
             if is_cancelled:
-                # Show cancellation/absence message for this date
-                message_parts.append(f"\n\n📅 {date}")
-                message_parts.append(f"   💡 <b>Графік скасовано</b> ⚡️")
+                # Show cancellation/absence message for this date (green circle)
+                message_parts.append(f"<blockquote>🟢 Графік скасовано ⚡️</blockquote>")
             elif shutdowns:
-                message_parts.append(f"\n\n📅 {date}\n")
                 # Each shutdown in separate blockquote
                 for shutdown in shutdowns:
                     hours = shutdown.get('shutdownHours', '')
@@ -523,7 +523,7 @@ class ScheduleChecker:
                         
                         # Calculate duration
                         duration = self._calculate_duration(from_time, to_time)
-                        duration_text = f" – (<u>{duration}</u>)" if duration else ""
+                        duration_text = f" – (<i>{duration}</i>)" if duration else ""
                         
                         # Check if shutdown is in the past
                         is_past = self._is_shutdown_past(date, from_time, to_time)
@@ -534,12 +534,8 @@ class ScheduleChecker:
                             message_parts.append(f"<blockquote><s>{shutdown_line}</s></blockquote>")
                         else:
                             # Active shutdown: red circle
-                            shutdown_line = f"🔴️ {hours_formatted}{duration_text}"
+                            shutdown_line = f"🔴 {hours_formatted}{duration_text}"
                             message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
-            
-            approved_since = date_data.get('scheduleApprovedSince')
-            if approved_since:
-                message_parts.append(f"\n📌 Оновлено: {approved_since}")
         
         return "\n".join(message_parts)
     
