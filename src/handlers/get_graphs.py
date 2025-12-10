@@ -5,7 +5,7 @@ from aiogram.types import Message
 from datetime import datetime, timedelta
 
 from src.keyboards.keyboards import get_subscribe_keyboard, get_group_keyboard
-from src.services.db import subscriptions_collection, get_schedules_collection
+from src.services.db import get_subscriptions_collection, get_schedules_collection
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +26,16 @@ async def get_graphs(message: Message, bot: Bot):
     user_id = message.from_user.id
 
     # Get a list of queues the user is subscribed to
-    subscriptions = list(subscriptions_collection.find({"id_telegram": user_id}))
-    queues = {sub.get("queue") or sub.get("group_number") for sub in subscriptions}  # Support both old and new field names
+    try:
+        subscriptions_collection = get_subscriptions_collection()
+        subscriptions = list(subscriptions_collection.find({"id_telegram": user_id}))
+        queues = {sub.get("queue") or sub.get("group_number") for sub in subscriptions}  # Support both old and new field names
+    except Exception as e:
+        logger.error(f"Error getting subscriptions: {e}")
+        return await message.reply(
+            text="Помилка підключення до бази даних. Спробуйте пізніше.",
+            reply_markup=get_subscribe_keyboard()
+        )
 
     if not queues:
         return await message.reply(

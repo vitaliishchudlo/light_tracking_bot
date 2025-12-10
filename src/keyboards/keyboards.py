@@ -4,7 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 from src.constants import QUEUES
-from src.services.db import subscriptions_collection, user_settings_collection
+from src.services.db import get_subscriptions_collection, get_user_settings_collection
 from typing import List
 
 
@@ -23,9 +23,13 @@ def get_subscribe_keyboard():
 def get_group_keyboard(user_id: int):
     builder = InlineKeyboardBuilder()
 
-    user_subscriptions = list(subscriptions_collection.find({"id_telegram": user_id}))
-    # Support both old 'group_number' and new 'queue' field names
-    subscribed_queues = [sub.get('queue') or sub.get('group_number') for sub in user_subscriptions if sub.get('queue') or sub.get('group_number')]
+    try:
+        subscriptions_collection = get_subscriptions_collection()
+        user_subscriptions = list(subscriptions_collection.find({"id_telegram": user_id}))
+        # Support both old 'group_number' and new 'queue' field names
+        subscribed_queues = [sub.get('queue') or sub.get('group_number') for sub in user_subscriptions if sub.get('queue') or sub.get('group_number')]
+    except Exception:
+        subscribed_queues = []
 
     for queue in QUEUES:
         text = f"✅ {queue}" if queue in subscribed_queues else queue
@@ -45,8 +49,12 @@ def get_notification_settings_keyboard(user_id: int):
     builder = InlineKeyboardBuilder()
     
     # Get current user settings
-    user_settings = user_settings_collection.find_one({"id_telegram": user_id})
-    current_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+    try:
+        user_settings_collection = get_user_settings_collection()
+        user_settings = user_settings_collection.find_one({"id_telegram": user_id})
+        current_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+    except Exception:
+        current_mode = 'always'
     
     # Define notification modes (emojis at the end)
     modes = [

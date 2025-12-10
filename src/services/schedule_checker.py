@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.services.api_client import ScheduleAPI
-from src.services.db import get_schedules_collection, subscriptions_collection, user_settings_collection
+from src.services.db import get_schedules_collection, get_subscriptions_collection, get_user_settings_collection
 from src.constants import QUEUES
 from aiogram import Bot
 
@@ -556,8 +556,13 @@ class ScheduleChecker:
             - disable_notification: True if notification should be silent, False otherwise
         """
         # Get user settings
-        user_settings = user_settings_collection.find_one({"id_telegram": user_id})
-        notification_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+        try:
+            user_settings_collection = get_user_settings_collection()
+            user_settings = user_settings_collection.find_one({"id_telegram": user_id})
+            notification_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+        except Exception as e:
+            logger.warning(f"Error getting notification settings for user {user_id}: {e}, defaulting to always")
+            notification_mode = 'always'
         
         # If disabled, never notify
         if notification_mode == 'disabled':
@@ -611,16 +616,20 @@ class ScheduleChecker:
         """Notify all subscribers of a queue about changes"""
         # Get all subscribers for this queue
         # Run sync MongoDB query in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        subscribers = await loop.run_in_executor(
-            None,
-            lambda: list(subscriptions_collection.find({
-                "$or": [
-                    {"queue": queue},
-                    {"group_number": queue}  # Support old field name
-                ]
-            }))
-        )
+        try:
+            loop = asyncio.get_event_loop()
+            subscribers = await loop.run_in_executor(
+                None,
+                lambda: list(get_subscriptions_collection().find({
+                    "$or": [
+                        {"queue": queue},
+                        {"group_number": queue}  # Support old field name
+                    ]
+                }))
+            )
+        except Exception as e:
+            logger.error(f"Error getting subscribers for queue {queue}: {e}")
+            return
         
         notified_count = 0
         skipped_count = 0

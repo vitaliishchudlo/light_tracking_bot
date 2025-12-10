@@ -4,7 +4,7 @@ from aiogram import Router, Bot
 from aiogram.types import CallbackQuery
 from src.constants import QUEUES
 from src.keyboards.keyboards import get_group_keyboard, get_notification_settings_keyboard
-from src.services.db import subscriptions_collection, user_settings_collection
+from src.services.db import get_subscriptions_collection, get_user_settings_collection
 
 router: Router = Router()
 
@@ -15,20 +15,26 @@ async def handle_queue_subscription(callback_query: CallbackQuery, bot: Bot, que
     user = callback_query.from_user
 
     if queue in QUEUES:
-        # Check if already subscribed (support both old and new field names)
-        existing = (subscriptions_collection.find_one({"id_telegram": user.id, "queue": queue}) or
-                    subscriptions_collection.find_one({"id_telegram": user.id, "group_number": queue}))
-        
-        if not existing:
-            # Insert user data into the MongoDB collection
-            subscriptions_collection.insert_one({
-                "id_telegram": user.id,
-                "firstname": user.first_name,
-                "second_name": user.last_name,
-                "username": user.username,
-                "queue": queue,
-                "date_subscribed": datetime.now()
-            })
+        try:
+            subscriptions_collection = get_subscriptions_collection()
+            # Check if already subscribed (support both old and new field names)
+            existing = (subscriptions_collection.find_one({"id_telegram": user.id, "queue": queue}) or
+                        subscriptions_collection.find_one({"id_telegram": user.id, "group_number": queue}))
+            
+            if not existing:
+                # Insert user data into the MongoDB collection
+                subscriptions_collection.insert_one({
+                    "id_telegram": user.id,
+                    "firstname": user.first_name,
+                    "second_name": user.last_name,
+                    "username": user.username,
+                    "queue": queue,
+                    "date_subscribed": datetime.now()
+                })
+        except Exception as e:
+            logger.error(f"Error subscribing to queue {queue}: {e}")
+            await bot.answer_callback_query(callback_query.id, text="Помилка підключення до бази даних. Спробуйте пізніше.")
+            return
 
         await bot.edit_message_reply_markup(
             chat_id=chat_id,
@@ -45,11 +51,17 @@ async def handle_queue_unsubscription(callback_query: CallbackQuery, bot: Bot, q
     user = callback_query.from_user
 
     if queue in QUEUES:
-        # Remove user data from the MongoDB collection (support both old and new field names)
-        # Delete by queue field
-        subscriptions_collection.delete_one({"id_telegram": user.id, "queue": queue})
-        # Delete by group_number field (old format)
-        subscriptions_collection.delete_one({"id_telegram": user.id, "group_number": queue})
+        try:
+            subscriptions_collection = get_subscriptions_collection()
+            # Remove user data from the MongoDB collection (support both old and new field names)
+            # Delete by queue field
+            subscriptions_collection.delete_one({"id_telegram": user.id, "queue": queue})
+            # Delete by group_number field (old format)
+            subscriptions_collection.delete_one({"id_telegram": user.id, "group_number": queue})
+        except Exception as e:
+            logger.error(f"Error unsubscribing from queue {queue}: {e}")
+            await bot.answer_callback_query(callback_query.id, text="Помилка підключення до бази даних. Спробуйте пізніше.")
+            return
 
         await bot.edit_message_reply_markup(
             chat_id=chat_id,
@@ -72,27 +84,33 @@ async def handle_notification_settings(callback_query: CallbackQuery, bot: Bot, 
         await bot.answer_callback_query(callback_query.id, text="Невірний режим")
         return
     
-    # Get current mode
-    user_settings = user_settings_collection.find_one({"id_telegram": user.id})
-    current_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
-    
-    # If same mode selected, don't update
-    if mode == current_mode:
-        await bot.answer_callback_query(callback_query.id, text="Цей режим вже вибрано")
+    try:
+        user_settings_collection = get_user_settings_collection()
+        # Get current mode
+        user_settings = user_settings_collection.find_one({"id_telegram": user.id})
+        current_mode = user_settings.get('notification_mode', 'always') if user_settings else 'always'
+        
+        # If same mode selected, don't update
+        if mode == current_mode:
+            await bot.answer_callback_query(callback_query.id, text="Цей режим вже вибрано")
+            return
+        
+        # Update or create user settings
+        user_settings_collection.update_one(
+            {"id_telegram": user.id},
+            {
+                "$set": {
+                    "id_telegram": user.id,
+                    "notification_mode": mode,
+                    "updated_at": datetime.now()
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        logger.error(f"Error updating notification settings: {e}")
+        await bot.answer_callback_query(callback_query.id, text="Помилка підключення до бази даних. Спробуйте пізніше.")
         return
-    
-    # Update or create user settings
-    user_settings_collection.update_one(
-        {"id_telegram": user.id},
-        {
-            "$set": {
-                "id_telegram": user.id,
-                "notification_mode": mode,
-                "updated_at": datetime.now()
-            }
-        },
-        upsert=True
-    )
     
     # Update keyboard
     await bot.edit_message_reply_markup(
