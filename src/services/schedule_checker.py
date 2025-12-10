@@ -37,7 +37,7 @@ class ScheduleChecker:
         # Run every 5 minutes to reduce API load
         self.scheduler.add_job(
             self.check_all_queues,
-            trigger=IntervalTrigger(minutes=1),
+            trigger=IntervalTrigger(minutes=5),
             id='check_schedules',
             replace_existing=True
         )
