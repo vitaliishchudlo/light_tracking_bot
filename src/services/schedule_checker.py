@@ -492,11 +492,11 @@ class ScheduleChecker:
         
         if all_cancelled:
             # All dates are cancelled - show cancellation message
-            message_parts = [f"Скасовано графік для черги {queue} 🚫"]
+            message_parts = [f"<b>Скасовано графік для черги <u>{queue}</u></b>🚫"]
         elif new_date:
-            message_parts = [f"З'явився графік на {new_date} для черги {queue} 🔔"]
+            message_parts = [f"<b>З'явився графік на <u>{new_date}</u> для черги <u>{queue}</u></b> 🔔"]
         else:
-            message_parts = [f"Зміни у графіку для черги {queue} ❗️"]
+            message_parts = [f"<b>Зміни у графіку для черги <u>{queue}</u></b>❗️"]
 
         # Sort dates
         for date in sorted_dates:
