@@ -277,6 +277,39 @@ class ScheduleChecker:
             logger.warning(f"Failed to parse time: {time_str}")
             return None
     
+    def _calculate_duration(self, from_time_str: str, to_time_str: str) -> str:
+        """Calculate duration between two times and return formatted string like 'на 2 год 30хв'"""
+        try:
+            from_time = self._parse_time(from_time_str)
+            to_time = self._parse_time(to_time_str)
+            
+            if not from_time or not to_time:
+                return ""
+            
+            # Create datetime objects for calculation
+            from_dt = datetime.combine(datetime.now().date(), from_time)
+            to_dt = datetime.combine(datetime.now().date(), to_time)
+            
+            # Handle case where to_time is 00:00 (means next day)
+            if to_time_str == "00:00":
+                to_dt += timedelta(days=1)
+            
+            # Calculate difference
+            duration = to_dt - from_dt
+            total_minutes = int(duration.total_seconds() / 60)
+            
+            hours = total_minutes // 60
+            minutes = total_minutes % 60
+            
+            # Format duration string
+            if minutes == 0:
+                return f"на {hours} год"
+            else:
+                return f"на {hours} год {minutes}хв"
+        except Exception as e:
+            logger.error(f"Error calculating duration: {e}")
+            return ""
+    
     def _is_shutdown_past(self, event_date: str, shutdown_from: str, shutdown_to: str) -> bool:
         """Check if shutdown is in the past (ended)"""
         try:
@@ -478,18 +511,31 @@ class ScheduleChecker:
                 message_parts.append(f"   💡 <b>Графік скасовано</b> ⚡️")
             elif shutdowns:
                 message_parts.append(f"\n\n📅 {date}\n")
+                # Each shutdown in separate blockquote
                 for shutdown in shutdowns:
                     hours = shutdown.get('shutdownHours', '')
                     from_time = shutdown.get('from', '')
                     to_time = shutdown.get('to', '')
                     
-                    if hours:
+                    if hours and from_time and to_time:
+                        # Format hours with spaces: "10:30 - 13:30"
+                        hours_formatted = hours.replace('-', ' - ')
+                        
+                        # Calculate duration
+                        duration = self._calculate_duration(from_time, to_time)
+                        duration_text = f" – (<u>{duration}</u>)" if duration else ""
+                        
                         # Check if shutdown is in the past
                         is_past = self._is_shutdown_past(date, from_time, to_time)
+                        
                         if is_past:
-                            message_parts.append(f"   🔴️ <s> {hours} </s>")
+                            # Past shutdown: white circle and strikethrough everything
+                            shutdown_line = f"⚪️ {hours_formatted}{duration_text}"
+                            message_parts.append(f"<blockquote><s>{shutdown_line}</s></blockquote>")
                         else:
-                            message_parts.append(f"   🔴️ {hours}")
+                            # Active shutdown: red circle
+                            shutdown_line = f"🔴️ {hours_formatted}{duration_text}"
+                            message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
             
             approved_since = date_data.get('scheduleApprovedSince')
             if approved_since:
