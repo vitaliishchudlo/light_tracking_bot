@@ -796,7 +796,7 @@ class ScheduleChecker:
         for queue in QUEUES:
             await self.check_queue(queue)
             # Delay between API calls for different queues to avoid bursts
-            # await asyncio.sleep(5)
+            await asyncio.sleep(5)
         
         logger.info("Finished schedule check for all queues")
 
