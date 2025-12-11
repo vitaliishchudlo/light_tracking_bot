@@ -85,5 +85,5 @@ def get_notification_settings_keyboard(user_id: int):
     # Row 4: "00:00-10:00" (1 button)
     # Row 5: "Вимкнути" (1 button)
     builder.adjust(1, 2, 2, 1, 1)
-    
+
     return builder.as_markup()

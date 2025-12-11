@@ -1,3 +1,5 @@
+import asyncio
+
 from aiogram import Router, Bot
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -22,8 +24,17 @@ async def handle_start_command(message: Message, bot: Bot):
     )
     
     # Show queue selection keyboard
-    await bot.send_message(
+    queue_message = await bot.send_message(
         chat_id=message.chat.id,
         text="Обери черги для відстежування:",
         reply_markup=get_group_keyboard(message.from_user.id)
+    )
+
+    import asyncio
+    await asyncio.sleep(2)
+    # Show main menu keyboard again so user can see it
+    await bot.send_message(
+        chat_id=message.chat.id,
+        text="Меню нижче ⬇️",
+        reply_markup=get_subscribe_keyboard()
     )

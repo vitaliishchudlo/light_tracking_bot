@@ -104,10 +104,14 @@ async def get_graphs(message: Message, bot: Bot):
             
             # Check if schedule exists
             schedule = {}
-            if doc and doc.get('schedule'):
-                schedule = doc.get('schedule', {})
-                if not isinstance(schedule, dict):
-                    schedule = {}
+            initially_empty_dates = set()
+            if doc:
+                if doc.get('schedule'):
+                    schedule = doc.get('schedule', {})
+                    if not isinstance(schedule, dict):
+                        schedule = {}
+                # Get dates that were initially empty (not cancellations)
+                initially_empty_dates = set(doc.get('initially_empty_dates', []))
             
             # Sort by event date
             sorted_dates = sorted(schedule.keys()) if schedule else []
@@ -164,8 +168,13 @@ async def get_graphs(message: Message, bot: Bot):
                     message_parts.append(f"\n📅 {event_date}")
                     
                     if not shutdowns:
-                        # No shutdowns - schedule is cancelled (green circle)
-                        message_parts.append(f"<blockquote>🟢 Графік скасовано ⚡️</blockquote>")
+                        # No shutdowns - check if it's initially empty or cancelled
+                        if event_date in initially_empty_dates:
+                            # This date appeared with empty shutdowns (not a cancellation)
+                            message_parts.append(f"<blockquote>🟢 Для цієї групи світло не вимикатимуть</blockquote>")
+                        else:
+                            # Schedule was cancelled (had shutdowns, now empty)
+                            message_parts.append(f"<blockquote>🟢 Графік скасовано ⚡️</blockquote>")
                     else:
                         # Each shutdown in separate blockquote
                         for shutdown in shutdowns:

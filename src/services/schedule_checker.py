@@ -134,6 +134,10 @@ class ScheduleChecker:
         old_dates = set(old_schedule.keys())
         new_dates = set(new_schedule.keys())
         
+        # Initialize variables for tracking changes
+        has_existing_changes = False
+        cancelled_dates = set()  # Dates that were cancelled (had shutdowns, now empty)
+        
         # Check for new dates (e.g., tomorrow's schedule appeared)
         new_date_added = new_dates - old_dates
         new_date_to_notify = None
@@ -142,20 +146,28 @@ class ScheduleChecker:
             # Check if we already showed this date today
             shown_dates = await self._get_shown_dates_today(queue)
             for new_date in sorted(new_date_added):
-                # Only notify if the new date has actual shutdowns (not empty/cancelled)
                 new_date_data = new_schedule.get(new_date, {})
                 new_date_shutdowns = new_date_data.get('shutdowns', [])
                 
-                if new_date not in shown_dates and len(new_date_shutdowns) > 0:
-                    logger.info(f"New date appeared for {queue}: {new_date} - will notify")
-                    new_date_to_notify = new_date
-                    break  # Only notify about the first new date we haven't shown
+                if new_date not in shown_dates:
+                    if len(new_date_shutdowns) > 0:
+                        # New date with shutdowns - notify normally
+                        logger.info(f"New date appeared for {queue}: {new_date} - will notify")
+                        new_date_to_notify = new_date
+                        break  # Only notify about the first new date we haven't shown
+                    else:
+                        # New date with empty shutdowns - this means schedule appeared but won't be applied
+                        # (not a cancellation, just info that light won't be shut off for this group)
+                        logger.info(f"New date {new_date} appeared but is empty (light won't be shut off) - will notify as new date")
+                        # Set as new_date_to_notify so it shows as "new schedule appeared"
+                        # Don't add to cancelled_dates - this is not a cancellation
+                        if new_date_to_notify is None:
+                            new_date_to_notify = new_date
+                            break
                 elif len(new_date_shutdowns) == 0:
-                    logger.debug(f"New date {new_date} appeared but is empty (cancelled) - skipping notification")
+                    logger.debug(f"New date {new_date} appeared but is empty and already shown - skipping notification")
         
         # Check if shutdowns changed for existing dates
-        has_existing_changes = False
-        cancelled_dates = set()  # Dates that were cancelled (had shutdowns, now empty)
         
         # Check dates that exist in both old and new schedules
         common_dates = new_dates & old_dates
@@ -426,8 +438,15 @@ class ScheduleChecker:
             logger.error(f"Error retrieving stored schedule for {queue}: {e}", exc_info=True)
             return None
     
-    async def _save_schedule(self, queue: str, schedule: Dict[str, Any], approved_since: Optional[str] = None):
-        """Save schedule to database"""
+    async def _save_schedule(self, queue: str, schedule: Dict[str, Any], approved_since: Optional[str] = None, initially_empty_dates: Optional[set] = None):
+        """Save schedule to database
+        
+        Args:
+            queue: Queue number
+            schedule: Schedule data
+            approved_since: Latest approval timestamp
+            initially_empty_dates: Set of dates that appeared with empty shutdowns (not cancellations)
+        """
         schedules_collection = get_schedules_collection()
         if schedules_collection is None:
             logger.error("schedules_collection is not initialized - cannot save schedule")
@@ -435,13 +454,33 @@ class ScheduleChecker:
         
         try:
             logger.debug(f"Saving schedule for {queue}: {len(schedule)} dates - {list(schedule.keys())[:3]}")
+            
+            # Get existing initially_empty_dates to preserve them
+            existing_doc = await schedules_collection.find_one({"queue": queue})
+            existing_initially_empty = set(existing_doc.get('initially_empty_dates', [])) if existing_doc else set()
+            
+            # Remove dates that now have shutdowns (they were initially empty but now have schedule)
+            for date in list(existing_initially_empty):
+                date_data = schedule.get(date, {})
+                if len(date_data.get('shutdowns', [])) > 0:
+                    # Date now has shutdowns - remove from initially_empty
+                    existing_initially_empty.discard(date)
+            
+            # Add new initially_empty_dates
+            if initially_empty_dates:
+                existing_initially_empty.update(initially_empty_dates)
+            
+            # Remove dates that are no longer in schedule
+            existing_initially_empty = {d for d in existing_initially_empty if d in schedule}
+            
             result = await schedules_collection.update_one(
                 {"queue": queue},
                 {
                     "$set": {
                         "schedule": schedule,
                         "lastChecked": datetime.now(),
-                        "scheduleApprovedSince": approved_since
+                        "scheduleApprovedSince": approved_since,
+                        "initially_empty_dates": list(existing_initially_empty)
                     }
                 },
                 upsert=True
@@ -479,18 +518,32 @@ class ScheduleChecker:
         if cancelled_dates is None:
             cancelled_dates = set()
         
-        # Check if all dates in schedule are effectively cancelled
-        # We treat a date as cancelled if it has no shutdowns (empty list) or explicitly listed in cancelled_dates
         sorted_dates = sorted(schedule.keys())
+        
+        # Check if new_date has empty shutdowns (schedule appeared but won't be applied)
+        new_date_empty = False
+        if new_date:
+            new_date_data = schedule.get(new_date, {})
+            new_date_shutdowns = new_date_data.get('shutdowns', [])
+            new_date_empty = len(new_date_shutdowns) == 0
+        
+        # Check if all dates in schedule are effectively cancelled
+        # BUT: if new_date is empty, it's not a cancellation - it's a new schedule that won't be applied
+        # We treat a date as cancelled only if it's explicitly in cancelled_dates
+        # Exclude new_date with empty shutdowns from cancellation check
         all_cancelled = (
             len(sorted_dates) > 0
+            and not (new_date and new_date_empty)  # Don't treat as cancelled if new_date is empty (it's new info, not cancellation)
             and all(
-                (len(schedule[date].get('shutdowns', [])) == 0) or (date in cancelled_dates)
+                date in cancelled_dates  # Only dates explicitly marked as cancelled
                 for date in sorted_dates
             )
         )
         
-        if all_cancelled:
+        if new_date and new_date_empty:
+            # New date appeared but is empty - schedule appeared but won't be applied
+            message_parts = [f"<b>З'явився графік на <u>{new_date}</u> для черги <u>{queue}</u></b> 🔔"]
+        elif all_cancelled:
             # All dates are cancelled - show cancellation message
             message_parts = [f"<b>Скасовано графік для черги <u>{queue}</u></b>🚫"]
         elif new_date:
@@ -502,14 +555,19 @@ class ScheduleChecker:
         for date in sorted_dates:
             date_data = schedule[date]
             shutdowns = date_data.get('shutdowns', [])
-            # Consider a date cancelled if it has no shutdowns or explicitly marked as cancelled
-            is_cancelled = (len(shutdowns) == 0) or (date in cancelled_dates)
+            # Consider a date cancelled only if it's explicitly in cancelled_dates
+            # (not if it's a new date with empty shutdowns - that's just info that light won't be shut off)
+            is_cancelled = date in cancelled_dates
+            is_new_date_empty = (new_date == date and len(shutdowns) == 0)
             
             message_parts.append(f"\n📅 {date}")
 
             if is_cancelled:
                 # Show cancellation/absence message for this date (green circle)
                 message_parts.append(f"<blockquote>🟢 Графік скасовано ⚡️</blockquote>")
+            elif is_new_date_empty:
+                # New date with empty shutdowns - schedule appeared but won't be applied
+                message_parts.append(f"<blockquote>🟢 Для цієї групи світло не вимикатимуть</blockquote>")
             elif shutdowns:
                 # Each shutdown in separate blockquote
                 for shutdown in shutdowns:
@@ -703,8 +761,17 @@ class ScheduleChecker:
             # Check for changes
             has_changes, new_date, cancelled_dates = await self._has_changes(queue, old_schedule, new_schedule)
             
+            # Track dates that appeared with empty shutdowns (not cancellations)
+            initially_empty_dates = set()
+            if new_date:
+                new_date_data = new_schedule.get(new_date, {})
+                new_date_shutdowns = new_date_data.get('shutdowns', [])
+                if len(new_date_shutdowns) == 0:
+                    # New date with empty shutdowns - mark as initially empty
+                    initially_empty_dates.add(new_date)
+            
             # Always save the latest schedule to database
-            await self._save_schedule(queue, new_schedule, latest_approved)
+            await self._save_schedule(queue, new_schedule, latest_approved, initially_empty_dates)
             
             # Only notify if there are actual changes
             if has_changes:
