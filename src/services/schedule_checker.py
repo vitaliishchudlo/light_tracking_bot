@@ -110,24 +110,26 @@ class ScheduleChecker:
         """
         # First time - save schedule but don't notify (return False to skip notification)
         # This prevents spamming users on first run
-        # BUT: if there are new dates with actual shutdowns, we should notify
+        # BUT: if there are new dates with actual shutdowns OR empty shutdowns, we should notify
         # IMPORTANT: If old_schedule is empty and new_schedule is also empty ([] from API),
         # this means "no schedules exist" - not a cancellation, just update DB silently
         if not old_schedule or len(old_schedule) == 0:
             logger.info(f"First time checking this queue or empty old schedule. Old: {old_schedule}, New dates: {list(new_schedule.keys())}")
             
-            # Check if there are new dates with actual shutdowns - if yes, notify
+            # Check if there are new dates - notify about first one (with or without shutdowns)
             if new_schedule and len(new_schedule) > 0:
-                for date, date_data in new_schedule.items():
+                shown_dates = await self._get_shown_dates_today(queue)
+                for date, date_data in sorted(new_schedule.items()):
                     shutdowns = date_data.get('shutdowns', [])
-                    if len(shutdowns) > 0:
-                        # Found a date with actual shutdowns - notify about it
-                        shown_dates = await self._get_shown_dates_today(queue)
-                        if date not in shown_dates:
+                    if date not in shown_dates:
+                        # Found a date (with or without shutdowns) - notify about it
+                        if len(shutdowns) > 0:
                             logger.info(f"First time but found new date {date} with shutdowns - will notify")
-                            return True, date, set()
+                        else:
+                            logger.info(f"First time but found new date {date} with empty shutdowns - will notify")
+                        return True, date, set()
             
-            # No new dates with shutdowns, or all already shown, or empty [] - don't notify
+            # No new dates, or all already shown, or empty [] - don't notify
             return False, None, set()
         
         # Compare by event dates and shutdowns
