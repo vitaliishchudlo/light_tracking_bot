@@ -100,7 +100,7 @@ async def get_graphs(message: Message, bot: Bot):
             doc = await schedules_collection.find_one({"queue": queue})
             
             # Format message for this queue
-            message_parts = [f"Графік для черги {queue}💡"]
+            message_parts = [f"<b>Графік для черги <u>{queue}</u>💡</b>"]
             
             # Check if schedule exists
             schedule = {}
@@ -165,7 +165,7 @@ async def get_graphs(message: Message, bot: Bot):
                     date_data = schedule.get(event_date, {})
                     shutdowns = date_data.get('shutdowns', [])
                     
-                    message_parts.append(f"\n📅 {event_date}")
+                    message_parts.append(f"\n📅 <b><i>{event_date}</i></b>")
                     
                     if not shutdowns:
                         # No shutdowns - check if it's initially empty or cancelled

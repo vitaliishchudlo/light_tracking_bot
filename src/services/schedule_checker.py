@@ -147,7 +147,20 @@ class ScheduleChecker:
         if new_date_added:
             # Check if we already showed this date today
             shown_dates = await self._get_shown_dates_today(queue)
+            now = datetime.now()
+            today = now.date()
+            
             for new_date in sorted(new_date_added):
+                # Check if new_date is in the past - don't notify about past dates
+                date_obj = self._parse_date(new_date)
+                is_past = False
+                if date_obj:
+                    date_only = date_obj.date()
+                    if date_only < today:
+                        is_past = True
+                        logger.debug(f"New date {new_date} is in the past - skipping notification")
+                        continue
+                
                 new_date_data = new_schedule.get(new_date, {})
                 new_date_shutdowns = new_date_data.get('shutdowns', [])
                 
@@ -185,10 +198,21 @@ class ScheduleChecker:
             logger.debug(f"Date {date}: old_shutdowns={len(old_shutdowns)}, new_shutdowns={len(new_shutdowns)}")
             
             # Check if schedule was cancelled (had shutdowns, now empty)
+            # BUT: don't mark as cancelled if the date is already in the past (yesterday or earlier)
             if len(old_shutdowns) > 0 and len(new_shutdowns) == 0:
-                logger.info(f"Schedule cancelled for {date}: had {len(old_shutdowns)} shutdowns, now empty")
-                cancelled_dates.add(date)
-                has_existing_changes = True
+                # Check if date is in the past
+                date_obj = self._parse_date(date)
+                is_past = False
+                if date_obj:
+                    date_only = date_obj.date()
+                    if date_only < today:
+                        is_past = True
+                        logger.debug(f"Date {date} is in the past - not marking as cancelled (natural expiration)")
+                
+                if not is_past:
+                    logger.info(f"Schedule cancelled for {date}: had {len(old_shutdowns)} shutdowns, now empty")
+                    cancelled_dates.add(date)
+                    has_existing_changes = True
                 continue  # Don't check other changes for cancelled dates
             
             # Compare shutdowns count
@@ -520,12 +544,48 @@ class ScheduleChecker:
         if cancelled_dates is None:
             cancelled_dates = set()
         
-        sorted_dates = sorted(schedule.keys())
+        # Filter out past dates (yesterday or earlier) - don't show them in notifications
+        now = datetime.now()
+        today = now.date()
+        filtered_schedule = {}
+        filtered_cancelled_dates = set()
+        
+        for date, date_data in schedule.items():
+            date_obj = self._parse_date(date)
+            if date_obj:
+                date_only = date_obj.date()
+                # Only include dates that are today or in the future
+                if date_only >= today:
+                    filtered_schedule[date] = date_data
+                    if date in cancelled_dates:
+                        filtered_cancelled_dates.add(date)
+            else:
+                # Can't parse date - include it to be safe
+                filtered_schedule[date] = date_data
+                if date in cancelled_dates:
+                    filtered_cancelled_dates.add(date)
+        
+        # Update cancelled_dates to only include non-past dates
+        cancelled_dates = filtered_cancelled_dates
+        
+        # If new_date is in the past, don't highlight it
+        if new_date:
+            date_obj = self._parse_date(new_date)
+            if date_obj and date_obj.date() < today:
+                new_date = None
+        
+        sorted_dates = sorted(filtered_schedule.keys())
+        
+        # If all dates were filtered out (all in the past), return empty message
+        # This prevents notifications about past dates when a new day starts
+        if len(sorted_dates) == 0:
+            logger.debug(f"All dates filtered out for {queue} (all in the past) - returning empty message")
+            return ""
         
         # Check if new_date has empty shutdowns (schedule appeared but won't be applied)
         new_date_empty = False
         if new_date:
-            new_date_data = schedule.get(new_date, {})
+            new_date_data = filtered_schedule.get(new_date, {})
             new_date_shutdowns = new_date_data.get('shutdowns', [])
             new_date_empty = len(new_date_shutdowns) == 0
         
@@ -555,14 +615,14 @@ class ScheduleChecker:
 
         # Sort dates
         for date in sorted_dates:
-            date_data = schedule[date]
+            date_data = filtered_schedule[date]
             shutdowns = date_data.get('shutdowns', [])
             # Consider a date cancelled only if it's explicitly in cancelled_dates
             # (not if it's a new date with empty shutdowns - that's just info that light won't be shut off)
             is_cancelled = date in cancelled_dates
             is_new_date_empty = (new_date == date and len(shutdowns) == 0)
             
-            message_parts.append(f"\n📅 {date}")
+            message_parts.append(f"\n📅 <b><i>{date}</i></b>")
 
             if is_cancelled:
                 # Show cancellation/absence message for this date (green circle)
@@ -843,6 +903,11 @@ class ScheduleChecker:
                 else:
                     # Fallback - show all new schedule
                     message = self._format_notification_message(queue, new_schedule, None, cancelled_dates)
+                
+                # Don't send notification if message is empty (all dates were filtered out as past)
+                if not message or message.strip() == "":
+                    logger.debug(f"Message is empty for {queue} (all dates in the past) - skipping notification")
+                    return False
                 
                 await self._notify_subscribers(queue, message)
                 return True
