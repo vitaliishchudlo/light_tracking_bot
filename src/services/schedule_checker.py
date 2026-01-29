@@ -108,6 +108,10 @@ class ScheduleChecker:
             - new_date_notification: Date string if new date appeared (e.g., tomorrow) that we haven't shown today, None otherwise
             - cancelled_dates: Set of dates that were cancelled (had shutdowns, now empty)
         """
+        # Initialize today at the beginning so it's available throughout the method
+        now = datetime.now()
+        today = now.date()
+        
         # First time - save schedule but don't notify (return False to skip notification)
         # This prevents spamming users on first run
         # BUT: if there are new dates with actual shutdowns OR empty shutdowns, we should notify
@@ -147,8 +151,6 @@ class ScheduleChecker:
         if new_date_added:
             # Check if we already showed this date today
             shown_dates = await self._get_shown_dates_today(queue)
-            now = datetime.now()
-            today = now.date()
             
             for new_date in sorted(new_date_added):
                 # Check if new_date is in the past - don't notify about past dates
@@ -233,8 +235,6 @@ class ScheduleChecker:
         # Check for removed dates (dates that were in old but not in new)
         # This handles cases like: old had [today, tomorrow], new has only [tomorrow] (today was cancelled)
         removed_dates = old_dates - new_dates
-        now = datetime.now()
-        today = now.date()
         
         if removed_dates:
             # Check which removed dates are today or in the future (should be notified as cancelled)
