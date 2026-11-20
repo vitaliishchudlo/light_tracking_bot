@@ -543,7 +543,7 @@ class ScheduleChecker:
         except Exception as e:
             logger.error(f"Error saving schedule for {queue}: {e}", exc_info=True)
     
-    def _format_notification_message(self, queue: str, schedule: Dict[str, Any], new_date: Optional[str] = None, cancelled_dates: Optional[set] = None) -> str:
+    def _format_notification_message(self, queue: str, schedule: Dict[str, Any], new_date: Optional[str] = None, cancelled_dates: Optional[set] = None, old_schedule: Optional[Dict[str, Any]] = None) -> str:
         """
         Format notification message for users
         
@@ -552,6 +552,8 @@ class ScheduleChecker:
             schedule: Schedule data
             new_date: Optional new date that appeared (e.g., tomorrow)
             cancelled_dates: Set of dates that were cancelled (had shutdowns, now empty)
+            old_schedule: Optional previous schedule; when given, removed intervals are shown
+                as ❌ (strikethrough) and added ones are marked 🆕
             
         Returns:
             Formatted message
@@ -646,13 +648,33 @@ class ScheduleChecker:
                 # New date with empty shutdowns - schedule appeared but won't be applied
                 message_parts.append(f"<blockquote>🟢 Для цієї групи світло не вимикатимуть</blockquote>")
             elif shutdowns:
+                # Diff against the previous schedule for this date (only if it had shutdowns too),
+                # so users see what exactly was removed/added. Identical intervals -> no marks.
+                old_shutdowns = []
+                if old_schedule and isinstance(old_schedule.get(date), dict):
+                    old_shutdowns = old_schedule[date].get('shutdowns', []) or []
+                old_keys = {(sh.get('from'), sh.get('to')) for sh in old_shutdowns}
+                new_keys = {(sh.get('from'), sh.get('to')) for sh in shutdowns}
+                show_diff = bool(old_keys) and old_keys != new_keys
+                removed = [sh for sh in old_shutdowns if (sh.get('from'), sh.get('to')) not in new_keys] if show_diff else []
+
+                entries = [(sh, False) for sh in shutdowns] + [(sh, True) for sh in removed]
+                if removed:
+                    entries.sort(key=lambda e: (e[0].get('from', ''), not e[1]))  # removed first on same start
+
                 # Each shutdown in separate blockquote
-                for shutdown in shutdowns:
+                for shutdown, is_removed in entries:
                     hours = shutdown.get('shutdownHours', '')
                     from_time = shutdown.get('from', '')
                     to_time = shutdown.get('to', '')
                     
-                    if hours and from_time and to_time:
+                    if hours and from_time and to_time and is_removed:
+                        # Removed interval: cross mark and strikethrough
+                        hours_formatted = hours.replace('-', ' - ')
+                        duration = self._calculate_duration(from_time, to_time)
+                        duration_text = f" – (<i>{duration}</i>)" if duration else ""
+                        message_parts.append(f"<blockquote>❌ <s>{hours_formatted}{duration_text}</s></blockquote>")
+                    elif hours and from_time and to_time:
                         # Format hours with spaces: "10:30 - 13:30"
                         hours_formatted = hours.replace('-', ' - ')
                         
@@ -671,6 +693,8 @@ class ScheduleChecker:
                             # Active shutdown: red circle, arrow if it is happening right now
                             arrow = "→ " if self._is_shutdown_started(date, from_time) else ""
                             shutdown_line = f"🔴 {arrow}{hours_formatted}{duration_text}"
+                            if show_diff and (from_time, to_time) not in old_keys:
+                                shutdown_line += " 🆕"
                             message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
         
         return "\n".join(message_parts)
@@ -895,7 +919,7 @@ class ScheduleChecker:
                             notification_schedule[date] = new_schedule[date]
                     
                     # If there are cancelled dates, don't highlight new_date separately - show as changes
-                    message = self._format_notification_message(queue, notification_schedule, None if cancelled_dates else new_date, cancelled_dates)
+                    message = self._format_notification_message(queue, notification_schedule, None if cancelled_dates else new_date, cancelled_dates, old_schedule)
                 elif new_date:
                     logger.info(f"New date appeared for {queue}: {new_date} - notifying subscribers")
                     # Mark this date as shown
@@ -906,7 +930,7 @@ class ScheduleChecker:
                         notification_schedule = {new_date: new_schedule[new_date]}
                         for date in changed_dates:
                             notification_schedule[date] = new_schedule[date]
-                        message = self._format_notification_message(queue, notification_schedule, new_date, cancelled_dates)
+                        message = self._format_notification_message(queue, notification_schedule, new_date, cancelled_dates, old_schedule)
                     else:
                         # Show only the new date
                         new_date_schedule = {new_date: new_schedule[new_date]}
@@ -915,10 +939,10 @@ class ScheduleChecker:
                     logger.info(f"Changes in existing dates for {queue} - notifying subscribers")
                     # Show only changed dates
                     changed_schedule = {date: new_schedule[date] for date in changed_dates}
-                    message = self._format_notification_message(queue, changed_schedule, None, cancelled_dates)
+                    message = self._format_notification_message(queue, changed_schedule, None, cancelled_dates, old_schedule)
                 else:
                     # Fallback - show all new schedule
-                    message = self._format_notification_message(queue, new_schedule, None, cancelled_dates)
+                    message = self._format_notification_message(queue, new_schedule, None, cancelled_dates, old_schedule)
                 
                 # Don't send notification if message is empty (all dates were filtered out as past)
                 if not message or message.strip() == "":
