@@ -3,7 +3,7 @@ from aiogram.types import KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-from src.constants import QUEUES
+from src.constants import QUEUES, BTN_GRAPHS, BTN_QUEUES, BTN_NOTIFICATIONS, REMINDER_OFFSETS, format_offset
 from src.services.db import get_subscriptions_collection, get_user_settings_collection
 from typing import List
 
@@ -11,9 +11,8 @@ from typing import List
 def get_subscribe_keyboard():
     builder = ReplyKeyboardBuilder()
 
-    builder.row(KeyboardButton(text="Мої графіки ⚡️"))
-    builder.row(KeyboardButton(text="Налаштування груп 👥"))
-    builder.row(KeyboardButton(text="Налаштування сповіщень🔔"))
+    builder.row(KeyboardButton(text=BTN_GRAPHS))
+    builder.row(KeyboardButton(text=BTN_QUEUES), KeyboardButton(text=BTN_NOTIFICATIONS))
 
     keyboard = builder.as_markup(resize_keyboard=True, one_time_keyboard=False)
 
@@ -38,8 +37,11 @@ def get_group_keyboard(user_id: int):
                                       callback_data=f"queue_unsubscribe_{queue}" if queue in subscribed_queues else f"queue_subscribe_{queue}")
         builder.add(button)
 
-    # Adjust the rows: 2 columns for each row
-    builder.adjust(2, 2, 2, 2, 2, 2)
+    # Way out of the queue list: show schedules (also brings back the main menu keyboard)
+    builder.add(InlineKeyboardButton(text="📊 Показати мої графіки", callback_data="show_graphs"))
+
+    # Adjust the rows: 2 columns for each queue row, last row - "show schedules" button
+    builder.adjust(2, 2, 2, 2, 2, 2, 1)
 
     return builder.as_markup()
 
@@ -84,6 +86,50 @@ def get_notification_settings_keyboard(user_id: int):
     # Row 3: "00:00-06:00", "00:00-08:00" (2 buttons)
     # Row 4: "00:00-10:00" (1 button)
     # Row 5: "Вимкнути" (1 button)
-    builder.adjust(1, 2, 2, 1, 1)
+    builder.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="notif_menu"))
+    builder.adjust(1, 2, 2, 1, 1, 1)
 
+    return builder.as_markup()
+
+
+def get_notifications_menu_keyboard():
+    """Notifications section: quiet hours or reminders"""
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="🌙 Тихі години", callback_data="notif_quiet"))
+    builder.add(InlineKeyboardButton(text="⏰ Нагадування", callback_data="notif_reminders"))
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def get_user_reminders(user_id: int) -> dict:
+    """Returns {"off": {minutes...}, "on": {minutes...}} - selected reminders of the user"""
+    try:
+        settings = get_user_settings_collection().find_one({"id_telegram": user_id}) or {}
+    except Exception:
+        settings = {}
+    return {
+        "off": set(settings.get("reminders_off", [])),
+        "on": set(settings.get("reminders_on", [])),
+    }
+
+
+def get_reminders_keyboard(user_id: int):
+    """Two independent columns: before power off (left) and before power on (right)"""
+    selected = get_user_reminders(user_id)
+    builder = InlineKeyboardBuilder()
+
+    # Column headers (not clickable)
+    builder.add(InlineKeyboardButton(text="🔴 Перед вимкненням", callback_data="noop"))
+    builder.add(InlineKeyboardButton(text="🟢 Перед увімкненням", callback_data="noop"))
+
+    for minutes in REMINDER_OFFSETS:
+        for kind in ("off", "on"):
+            mark = "✅ " if minutes in selected[kind] else ""
+            builder.add(InlineKeyboardButton(
+                text=f"{mark}за {format_offset(minutes)}",
+                callback_data=f"rem_{kind}_{minutes}",
+            ))
+
+    builder.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="notif_menu"))
+    builder.adjust(*([2] * (len(REMINDER_OFFSETS) + 1)), 1)
     return builder.as_markup()

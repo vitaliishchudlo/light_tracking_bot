@@ -3,7 +3,9 @@ import logging
 from aiogram import Router, Bot, F
 from aiogram.types import Message
 from datetime import datetime, timedelta
+from typing import Optional
 
+from src.constants import format_offset, BTN_GRAPHS, BTN_QUEUES, OLD_BTN_GRAPHS, OLD_BTN_QUEUES
 from src.keyboards.keyboards import get_subscribe_keyboard, get_group_keyboard
 from src.services.db import get_subscriptions_collection, get_schedules_collection
 
@@ -12,7 +14,7 @@ logger = logging.getLogger(__name__)
 router: Router = Router()
 
 
-@router.message(F.text == 'Налаштування груп 👥')
+@router.message(F.text.in_({BTN_QUEUES, OLD_BTN_QUEUES}))
 async def show_queue_settings(message: Message, bot: Bot):
     await bot.send_message(
         chat_id=message.chat.id,
@@ -21,9 +23,19 @@ async def show_queue_settings(message: Message, bot: Bot):
     )
 
 
-@router.message(F.text == 'Мої графіки ⚡️')
+@router.message(F.text.in_({BTN_GRAPHS, OLD_BTN_GRAPHS}))
 async def get_graphs(message: Message, bot: Bot):
-    user_id = message.from_user.id
+    await send_graphs(bot, chat_id=message.chat.id, user_id=message.from_user.id, reply_to=message)
+
+
+async def send_graphs(bot: Bot, chat_id: int, user_id: int, reply_to: Optional[Message] = None):
+    """Send schedules for all user's queues. Used by the menu button and the inline button."""
+
+    async def _answer(text: str, **kwargs):
+        # First message is a reply when triggered by a user message, otherwise a plain message
+        if reply_to is not None:
+            return await reply_to.reply(text=text, **kwargs)
+        return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
     # Get a list of queues the user is subscribed to
     try:
@@ -32,13 +44,13 @@ async def get_graphs(message: Message, bot: Bot):
         queues = {sub.get("queue") or sub.get("group_number") for sub in subscriptions}  # Support both old and new field names
     except Exception as e:
         logger.error(f"Error getting subscriptions: {e}")
-        return await message.reply(
+        return await _answer(
             text="Помилка підключення до бази даних. Спробуйте пізніше.",
             reply_markup=get_subscribe_keyboard()
         )
 
     if not queues:
-        return await message.reply(
+        return await _answer(
             text="Спочатку Вам потрібно підписатись на чергу",
             reply_markup=get_subscribe_keyboard()
         )
@@ -82,14 +94,22 @@ async def get_graphs(message: Message, bot: Bot):
         except Exception as e:
             logger.error(f"Error checking if shutdown is past: {e}")
             return False
-    
+
+    def _is_shutdown_started(event_date: str, shutdown_from: str) -> bool:
+        """Check if shutdown has already started (start time <= now)"""
+        date_obj = _parse_date(event_date)
+        from_time = _parse_time(shutdown_from)
+        if not date_obj or not from_time:
+            return False
+        return datetime.combine(date_obj.date(), from_time) <= datetime.now()
+
     # Fetch schedules from database (not API to avoid rate limiting)
     schedules_collection = get_schedules_collection()
     all_messages = []
     
     if schedules_collection is None:
         logger.warning("schedules_collection not initialized, cannot fetch schedules from DB")
-        return await message.reply(
+        return await _answer(
             text="Наразі сервіс недоступний. Спробуйте пізніше.",
             reply_markup=get_subscribe_keyboard()
         )
@@ -147,14 +167,9 @@ async def get_graphs(message: Message, bot: Bot):
                     duration = to_dt - from_dt
                     total_minutes = int(duration.total_seconds() / 60)
                     
-                    hours = total_minutes // 60
-                    minutes = total_minutes % 60
                     
-                    # Format duration string
-                    if minutes == 0:
-                        return f"на {hours} год"
-                    else:
-                        return f"на {hours} год {minutes}хв"
+                    # Format duration string: '3 год', '3 год 30 хв', '30 хв'
+                    return f"на {format_offset(total_minutes)}"
                 except Exception as e:
                     logger.error(f"Error calculating duration: {e}")
                     return ""
@@ -198,8 +213,9 @@ async def get_graphs(message: Message, bot: Bot):
                                     shutdown_line = f"⚪️ {hours_formatted}{duration_text}"
                                     message_parts.append(f"<blockquote><s>{shutdown_line}</s></blockquote>")
                                 else:
-                                    # Active shutdown: red circle
-                                    shutdown_line = f"🔴 {hours_formatted}{duration_text}"
+                                    # Active shutdown: red circle, arrow if it is happening right now
+                                    arrow = "→ " if _is_shutdown_started(event_date, from_time) else ""
+                                    shutdown_line = f"🔴 {arrow}{hours_formatted}{duration_text}"
                                     message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
             else:
                 # No schedule data or all dates are in the past - show that there's no schedule
@@ -221,10 +237,10 @@ async def get_graphs(message: Message, bot: Bot):
     for i, msg_text in enumerate(all_messages):
         # Send first message as reply, others as new messages
         if i == 0:
-            await message.reply(text=msg_text, parse_mode='HTML', reply_markup=get_subscribe_keyboard())
+            await _answer(msg_text, parse_mode='HTML', reply_markup=get_subscribe_keyboard())
         else:
             await bot.send_message(
-                chat_id=message.chat.id,
+                chat_id=chat_id,
                 text=msg_text,
                 parse_mode='HTML',
                 reply_markup=get_subscribe_keyboard()

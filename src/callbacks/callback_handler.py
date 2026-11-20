@@ -1,10 +1,21 @@
+import logging
 from datetime import datetime
 
 from aiogram import Router, Bot
 from aiogram.types import CallbackQuery
 from src.constants import QUEUES
-from src.keyboards.keyboards import get_group_keyboard, get_notification_settings_keyboard
+from src.handlers.get_graphs import send_graphs
+from src.constants import REMINDER_OFFSETS, REMINDER_KINDS, format_offset
+from src.handlers.notification_settings import NOTIFICATIONS_MENU_TEXT, QUIET_HOURS_TEXT, REMINDERS_TEXT
+from src.keyboards.keyboards import (
+    get_group_keyboard,
+    get_notification_settings_keyboard,
+    get_notifications_menu_keyboard,
+    get_reminders_keyboard,
+)
 from src.services.db import get_subscriptions_collection, get_user_settings_collection
+
+logger = logging.getLogger(__name__)
 
 router: Router = Router()
 
@@ -135,6 +146,39 @@ async def handle_notification_settings(callback_query: CallbackQuery, bot: Bot, 
     )
 
 
+async def show_screen(callback_query: CallbackQuery, text: str, reply_markup):
+    """Switch the settings message to another screen (edit in place)"""
+    await callback_query.message.edit_text(text=text, reply_markup=reply_markup)
+    await callback_query.answer()
+
+
+async def handle_reminder_toggle(callback_query: CallbackQuery, kind: str, minutes: int):
+    """Turn one reminder (before power off / on, N minutes) on or off"""
+    user = callback_query.from_user
+    field = f"reminders_{kind}"
+    try:
+        settings_collection = get_user_settings_collection()
+        current = (settings_collection.find_one({"id_telegram": user.id}) or {}).get(field, [])
+        enabled = minutes not in current
+        settings_collection.update_one(
+            {"id_telegram": user.id},
+            {
+                ("$addToSet" if enabled else "$pull"): {field: minutes},
+                "$set": {"updated_at": datetime.now()},
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        logger.error(f"Error updating reminders for user {user.id}: {e}")
+        await callback_query.answer("Помилка підключення до бази даних. Спробуйте пізніше.")
+        return
+
+    await callback_query.message.edit_reply_markup(reply_markup=get_reminders_keyboard(user.id))
+    what = "вимкненням" if kind == "off" else "увімкненням"
+    state = "увімкнено" if enabled else "вимкнено"
+    await callback_query.answer(f"Нагадування за {format_offset(minutes)} перед {what} {state}")
+
+
 @router.callback_query()
 async def handle_callback_query(callback_query: CallbackQuery, bot: Bot):
     data = callback_query.data
@@ -161,5 +205,30 @@ async def handle_callback_query(callback_query: CallbackQuery, bot: Bot):
         mode = data.split("notification_mode_")[-1]
         return await handle_notification_settings(callback_query, bot, mode)
     
+    # Notifications section screens
+    if data == "notif_menu":
+        return await show_screen(callback_query, NOTIFICATIONS_MENU_TEXT, get_notifications_menu_keyboard())
+    if data == "notif_quiet":
+        return await show_screen(callback_query, QUIET_HOURS_TEXT,
+                                 get_notification_settings_keyboard(callback_query.from_user.id))
+    if data == "notif_reminders":
+        return await show_screen(callback_query, REMINDERS_TEXT,
+                                 get_reminders_keyboard(callback_query.from_user.id))
+
+    # Reminder toggles: rem_off_15, rem_on_60, ...
+    if data.startswith("rem_"):
+        _, kind, minutes = data.split("_")
+        if kind in REMINDER_KINDS and minutes.isdigit() and int(minutes) in REMINDER_OFFSETS:
+            return await handle_reminder_toggle(callback_query, kind, int(minutes))
+
+    # Column headers in the reminders keyboard
+    if data == "noop":
+        return await callback_query.answer()
+
+    # Show user's schedules (inline button under the queue list)
+    if data == "show_graphs":
+        await bot.answer_callback_query(callback_query.id)
+        return await send_graphs(bot, chat_id=callback_query.message.chat.id, user_id=callback_query.from_user.id)
+
     # Unknown callback
     await bot.answer_callback_query(callback_query.id, text="Невідома команда")

@@ -3,11 +3,13 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from src.services.api_client import ScheduleAPI
+from src.services.reminders import init_reminders_storage, send_due_reminders
 from src.services.db import get_schedules_collection, get_subscriptions_collection, get_user_settings_collection
-from src.constants import QUEUES
+from src.constants import format_offset, QUEUES
 from aiogram import Bot
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,16 @@ class ScheduleChecker:
             trigger=IntervalTrigger(minutes=5),
             id='check_schedules',
             replace_existing=True
+        )
+        # Reminders before power off / on: every minute (at :05 s, events are on whole minutes)
+        await init_reminders_storage()
+        self.scheduler.add_job(
+            send_due_reminders,
+            trigger=CronTrigger(second=5),
+            args=[self.bot, self._get_notification_settings],
+            id='send_reminders',
+            replace_existing=True,
+            max_instances=1,
         )
         self.scheduler.start()
         logger.info("Schedule checker started successfully")
@@ -336,14 +348,9 @@ class ScheduleChecker:
             duration = to_dt - from_dt
             total_minutes = int(duration.total_seconds() / 60)
             
-            hours = total_minutes // 60
-            minutes = total_minutes % 60
             
-            # Format duration string
-            if minutes == 0:
-                return f"на {hours} год"
-            else:
-                return f"на {hours} год {minutes}хв"
+            # Format duration string: '3 год', '3 год 30 хв', '30 хв'
+            return f"на {format_offset(total_minutes)}"
         except Exception as e:
             logger.error(f"Error calculating duration: {e}")
             return ""
@@ -377,7 +384,15 @@ class ScheduleChecker:
         except Exception as e:
             logger.error(f"Error checking if shutdown is past: {e}", exc_info=True)
             return False
-    
+
+    def _is_shutdown_started(self, event_date: str, shutdown_from: str) -> bool:
+        """Check if shutdown has already started (start time <= now)"""
+        date_obj = self._parse_date(event_date)
+        from_time = self._parse_time(shutdown_from)
+        if not date_obj or not from_time:
+            return False
+        return datetime.combine(date_obj.date(), from_time) <= datetime.now()
+
     async def _get_shown_dates_today(self, queue: str) -> set:
         """Get dates that were shown to users today"""
         schedules_collection = get_schedules_collection()
@@ -653,8 +668,9 @@ class ScheduleChecker:
                             shutdown_line = f"⚪️ {hours_formatted}{duration_text}"
                             message_parts.append(f"<blockquote><s>{shutdown_line}</s></blockquote>")
                         else:
-                            # Active shutdown: red circle
-                            shutdown_line = f"🔴 {hours_formatted}{duration_text}"
+                            # Active shutdown: red circle, arrow if it is happening right now
+                            arrow = "→ " if self._is_shutdown_started(date, from_time) else ""
+                            shutdown_line = f"🔴 {arrow}{hours_formatted}{duration_text}"
                             message_parts.append(f"<blockquote>{shutdown_line}</blockquote>")
         
         return "\n".join(message_parts)
