@@ -6,7 +6,7 @@ services:
     container_name: svitlo-mongodb
     restart: unless-stopped
     volumes:
-      - mongodb_data:/data/db
+      - ./data/mongodb:/data/db  # database files live in the project folder: data/mongodb
       - mongodb_config:/data/configdb
     environment:
       - MONGO_INITDB_DATABASE=light_tracker_db
@@ -40,7 +40,6 @@ services:
     command: ["python", "bot.py"]
 
 volumes:
-  mongodb_data:
   mongodb_config:
 
 networks:

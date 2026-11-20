@@ -51,5 +51,8 @@ docker-compose.yml
 htmlcov/
 src/tests/
 
+# MongoDB data (bind-mounted, see docker-compose.yml)
+data/
+
 # Logs
 *.log

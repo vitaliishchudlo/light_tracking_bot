@@ -66,9 +66,8 @@ docker-compose up -d --build
 
 ## Volumes
 
-Дані MongoDB зберігаються в Docker volumes:
-- `mongodb_data` - дані бази
-- `mongodb_config` - конфігурація
+- `./data/mongodb` (папка в проєкті) - файли бази даних. Її можна просто скопіювати для резервної копії (краще при зупиненому `mongodb`, або через `mongodump`)
+- `mongodb_config` (Docker volume) - конфігурація
 
 ## Доступ до MongoDB
 
@@ -121,5 +120,5 @@ docker inspect svitlo-mongodb | grep -A 10 Health
 2. **MongoDB URL** автоматично налаштовується:
    - Docker: `mongodb://mongodb:27017/` (ім'я сервісу)
    - Локально: `mongodb://localhost:27017/` (дефолт)
-3. **Дані зберігаються** в Docker volumes, тому не втрачаються при перезапуску
+3. **Дані зберігаються** в папці `data/mongodb`, тому не втрачаються при перезапуску (і `docker-compose down -v` їх не видаляє)
 4. **Бот чекає** на готовність MongoDB через `depends_on` з `service_healthy`

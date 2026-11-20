@@ -56,5 +56,6 @@ htmlcov/
 Thumbs.db
 
 # MongoDB
+data/
 *.db
 *.sqlite
